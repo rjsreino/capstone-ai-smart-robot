@@ -1,0 +1,22 @@
+# Smart Assistant Requirements
+# Install with: pip install -r requirements_assistant.txt
+
+# Speech Recognition
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.13
+
+# ReSpeaker LED control (optional, for visual feedback)
+# Install separately: pip install pixel-ring
+
+# OpenCV (usually pre-installed on Jetson)
+opencv-python>=4.5.0
+
+# NumPy
+numpy>=1.19.0
+
+# DepthAI for Oak-D camera (usually pre-installed)
+depthai>=2.20.0
+
+# Note: llama.cpp needs to be compiled separately
+# Follow instructions at: https://github.com/ggerganov/llama.cpp
+

@@ -1,0 +1,27 @@
+[project]
+name = "rovy-api"
+version = "0.1.0"
+description = "FastAPI service for rover discovery, telemetry, and control"
+authors = [{ name = "Capstone Team" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.111.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27",
+    "depthai",
+    "opencv-python",
+    "pyserial>=3.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"

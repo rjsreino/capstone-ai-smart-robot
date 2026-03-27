@@ -1,0 +1,20 @@
+[Unit]
+Description=Capstone Robot API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jetson
+WorkingDirectory=/home/jetson/rovy/api
+# Wait for USB devices to settle after boot
+ExecStart=/home/jetson/rovy/api/scripts/autorun.sh
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
+Environment=HOST=0.0.0.0
+Environment=PORT=8000
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,108 @@
+================================================================================
+SMART ASSISTANT BENCHMARK RESULTS
+Timestamp: 2025-11-24 15:10:37
+================================================================================
+
+
+SIMPLE FACTS
+--------------------------------------------------------------------------------
+
+Q: What is the capital of France?
+A: The capital of France is Paris.
+Timing: Model=0.988s, TTS=2.318s, Total=3.306s
+
+Q: How many days are in a week?
+A: There are seven days in a week.
+Timing: Model=0.764s, TTS=1.883s, Total=2.647s
+
+Q: What color is the sky?
+A: The sky appears blue during the day due to a phenomenon called Rayleigh scattering, where blue light is scattered more by air particles.
+Timing: Model=1.540s, TTS=8.363s, Total=9.903s
+
+Q: What is 2 plus 2?
+A: 2 plus 2 equals 4.
+Timing: Model=0.723s, TTS=2.019s, Total=2.743s
+
+Q: Who invented the telephone?
+A: Alexander Graham Bell is credited with inventing the telephone.
+Timing: Model=0.857s, TTS=3.742s, Total=4.600s
+
+GENERAL KNOWLEDGE
+--------------------------------------------------------------------------------
+
+Q: Explain what photosynthesis is in simple terms.
+A: Photosynthesis is how plants, algae, and some bacteria use sunlight, water, and carbon dioxide to create their own food (glucose) and release oxygen as a byproduct.
+Timing: Model=1.934s, TTS=10.706s, Total=12.640s
+
+Q: What are the three states of matter?
+A: The three main states of matter are solid, liquid, and gas.
+Timing: Model=1.026s, TTS=4.256s, Total=5.282s
+
+Q: Why do we have seasons?
+A: Earth's tilt on its axis causes different parts of the planet to receive varying amounts of direct sunlight throughout the year, leading to seasonal changes.
+Timing: Model=1.747s, TTS=9.009s, Total=10.755s
+
+Q: What is the largest ocean on Earth?
+A: The largest ocean on Earth is the Pacific Ocean. It covers over 30% of the Earth's surface.
+Timing: Model=1.536s, TTS=6.011s, Total=7.547s
+
+Q: How does a car engine work?
+A: A car engine converts chemical energy from fuel into mechanical energy to power the wheels. This is achieved through a series of explosions that push pistons, which rotate a crankshaft, ultimately turning the wheels.
+Timing: Model=2.192s, TTS=12.607s, Total=14.799s
+
+REASONING
+--------------------------------------------------------------------------------
+
+Q: If I have 5 apples and give away 2, how many do I have left?
+A: You would have 3 apples left.
+Timing: Model=0.679s, TTS=2.013s, Total=2.692s
+
+Q: What comes next in this sequence: 2, 4, 6, 8?
+A: The next number is 10. This sequence follows a pattern of adding 2 to the previous number.
+Timing: Model=1.430s, TTS=5.192s, Total=6.623s
+
+Q: Which is heavier, a pound of feathers or a pound of bricks?
+A: They weigh the same. A pound is a unit of weight, so a pound of anything will always weigh the same as a pound of something else.
+Timing: Model=1.748s, TTS=7.319s, Total=9.067s
+
+Q: If it takes 5 machines 5 minutes to make 5 widgets, how long would it take 100 machines to make 100 widgets?
+A: It would still take 5 minutes. Each machine works independently, so the number of machines doesn't change the processing time for each individual widget.
+Timing: Model=1.757s, TTS=9.629s, Total=11.387s
+
+CONVERSATIONAL
+--------------------------------------------------------------------------------
+
+Q: What is your status?
+A: I am an AI language model, trained to be informative and comprehensive. I don't have a physical presence or personal experiences.
+Timing: Model=1.653s, TTS=8.365s, Total=10.019s
+
+Q: Are you ready?
+A: Yes, I am ready. What can I help you with?
+Timing: Model=1.038s, TTS=2.701s, Total=3.739s
+
+Q: Can you help me?
+A: I'll do my best! How can I help you?
+Timing: Model=1.059s, TTS=2.553s, Total=3.612s
+
+Q: What can you do?
+A: I am a large language model, trained to be informative and comprehensive. I can generate text, translate languages, write different kinds of creative content, and answer your questions in an informative way.
+Timing: Model=2.102s, TTS=12.732s, Total=14.835s
+
+ROBOT PRACTICAL
+--------------------------------------------------------------------------------
+
+Q: How far is 10 feet in meters?
+A: 10 feet is equal to 3.05 meters.
+Timing: Model=0.985s, TTS=3.069s, Total=4.054s
+
+Q: What time is it?
+A: I do not have access to real-time information, including the current time.
+Timing: Model=1.128s, TTS=4.260s, Total=5.388s
+
+Q: Calculate 25 percent of 80.
+A: 25 percent of 80 is 20.
+Timing: Model=0.933s, TTS=2.418s, Total=3.351s
+
+Q: Convert 100 fahrenheit to celsius.
+A: 100 degrees Fahrenheit is equal to 37.78 degrees Celsius.
+Timing: Model=1.187s, TTS=5.619s, Total=6.806s

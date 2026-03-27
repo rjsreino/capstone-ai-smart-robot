@@ -1,0 +1,48 @@
+{
+  "facts": [
+    {
+      "fact": "User's name is John User likes coffee User lives in Seattle User works as a teacher",
+      "added_at": "2025-12-05T11:30:39.960195",
+      "source": "Hello."
+    },
+    {
+      "fact": "User: I'm John. I'm a software engineer. I enjoy coding and working on projects. I also like to travel and explore new places. I live in Seattle, Washington.",
+      "added_at": "2025-12-05T11:51:32.250411",
+      "source": "Hello."
+    },
+    {
+      "fact": "User: What is the weather today? Assistant: It's clear sky in Seoul, -2 degrees, feels like -6",
+      "added_at": "2025-12-05T11:51:57.186170",
+      "source": "What is the weather today?"
+    },
+    {
+      "fact": "User's response: \"It's clear sky in Seoul, -2 degrees, feels like -6\"",
+      "added_at": "2025-12-05T11:52:17.687370",
+      "source": "What do you know about me?"
+    }
+  ],
+  "preferences": {},
+  "conversation_history": [
+    {
+      "user": "Hello.",
+      "assistant": "Hello! How can I assist you today?",
+      "timestamp": "2025-12-05T11:30:38.644835"
+    },
+    {
+      "user": "Hello.",
+      "assistant": "Hello John! How can I assist you today?",
+      "timestamp": "2025-12-05T11:51:30.385084"
+    },
+    {
+      "user": "What is the weather today?",
+      "assistant": "It's clear sky in Seoul, -2 degrees, feels like -6",
+      "timestamp": "2025-12-05T11:51:56.085086"
+    },
+    {
+      "user": "What do you know about me?",
+      "assistant": "It's clear sky in Seoul, -2 degrees, feels like -6",
+      "timestamp": "2025-12-05T11:52:16.354903"
+    }
+  ],
+  "last_updated": "2025-12-05T11:52:17.687370"
+}

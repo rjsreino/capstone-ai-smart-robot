@@ -1,0 +1,108 @@
+# ============================================================================
+# Rovy Project - Complete Requirements with Frozen Versions
+# ============================================================================
+# This file contains all required dependencies for the Rovy rover project
+# with exact version numbers for reproducible builds.
+#
+# Install with: pip install -r requirements.txt
+# ============================================================================
+
+# ============================================================================
+# Core Dependencies (Required for all modules)
+# ============================================================================
+
+# Serial communication with ESP32 rover controller
+pyserial==3.5
+
+# Numerical computing and array operations
+numpy==2.2.6
+
+# Computer vision and image processing
+opencv-python==4.12.0.88
+opencv-contrib-python==4.11.0.86
+opencv-python-headless==4.10.0.84
+
+# Image processing library
+Pillow==9.0.1
+
+# ============================================================================
+# Oak-D Depth Camera Support
+# ============================================================================
+
+# DepthAI SDK for Oak-D stereo depth camera
+depthai==2.30.0.0
+depthai-nodes==0.3.4
+depthai-pipeline-graph==0.0.5
+depthai-sdk==1.15.1
+
+# ============================================================================
+# LLaVA AI Vision-Language Model Support
+# ============================================================================
+
+# llama.cpp Python bindings for LLaVA inference
+llama_cpp_python==0.3.16
+
+# ============================================================================
+# Smart Assistant - Speech Recognition & TTS
+# ============================================================================
+
+# Speech recognition (Google Speech API, offline Sphinx, etc.)
+SpeechRecognition==3.14.3
+
+# Audio I/O for microphone input
+PyAudio==0.2.11
+
+# ReSpeaker LED ring control (optional, for visual feedback)
+pixel-ring==0.1.0
+
+# Piper TTS for natural text-to-speech
+piper-tts==1.3.0
+
+# ============================================================================
+# Deep Learning & Transformers (Optional - for advanced features)
+# ============================================================================
+
+# PyTorch for deep learning (if using transformers-based models)
+torch==2.9.0
+torchaudio==2.9.0
+
+# Hugging Face Transformers library
+transformers==4.44.2
+
+# Accelerate for distributed training/inference
+accelerate==1.11.0
+
+# BitsAndBytes for quantization
+bitsandbytes==0.42.0
+
+# SentencePiece tokenizer
+sentencepiece==0.2.1
+
+# Sentence transformers (if using embedding models)
+sentence-transformers==5.1.2
+
+# Protocol buffers (required by many ML libraries)
+protobuf==4.25.8
+
+# ============================================================================
+# Face Recognition - High Accuracy (InsightFace ArcFace)
+# ============================================================================
+
+# InsightFace for state-of-the-art face recognition (ArcFace model)
+insightface==0.7.3
+
+# ONNX Runtime for efficient model inference (supports CUDA on Jetson)
+onnxruntime-gpu==1.18.0
+# Alternative: onnxruntime (CPU-only) if GPU version doesn't work
+# onnxruntime==1.18.0
+
+# ============================================================================
+# Notes:
+# ============================================================================
+# - Some packages may have system-level dependencies (e.g., PyAudio requires
+#   portaudio, depthai requires USB permissions)
+# - For Jetson devices, some packages may need to be installed from NVIDIA
+#   repositories or compiled from source
+# - llama.cpp needs to be compiled separately if not using llama_cpp_python
+# - ReSpeaker pixel-ring may require sudo permissions for LED control
+# ============================================================================

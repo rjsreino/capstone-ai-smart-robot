@@ -1,0 +1,150 @@
+================================================================================
+SMART ASSISTANT BENCHMARK RESULTS
+Timestamp: 2025-11-24 14:10:36
+================================================================================
+
+
+SIMPLE FACTS
+--------------------------------------------------------------------------------
+
+Q: What is the capital of France?
+A: The capital of France is Paris.
+Timing: Model=0.894s, TTS=2.584s, Total=3.478s
+
+Q: How many days are in a week?
+A: There are 7 days in a week.
+Timing: Model=0.796s, TTS=2.262s, Total=3.058s
+
+Q: What color is the sky?
+A: The sky appears blue most of the time, but its color can change depending on a few factors:
+
+ Sunlight and Scattering: The blue color comes from the way sunlight interacts with the Earth's atmosphere. Blue wavelengths are scattered more by air molecules than other colors, making the sky appear blue to our eyes.
+ Time of Day: The sky can appear different colors depending on the time of day. At sunrise and sunset, the sky can appear red, orange, and
+Timing: Model=4.814s, TTS=31.725s, Total=36.539s
+
+Q: What is 2 plus 2?
+A: 2 plus 2 is 4.
+Timing: Model=0.749s, TTS=1.506s, Total=2.256s
+
+Q: Who invented the telephone?
+A: The invention of the telephone is credited to Alexander Graham Bell. 
+
+While others were working on similar technologies at the time, Bell is widely recognized for:
+
+ Receiving the first U.S. patent for the telephone on March 7, 1876. 
+ Making the first successful public demonstration of the telephone in 1876.
+
+It's important to note that while Bell is credited with the invention, it was a culmination of many advancements
+Timing: Model=4.788s, TTS=34.608s, Total=39.396s
+
+GENERAL KNOWLEDGE
+--------------------------------------------------------------------------------
+
+Q: Explain what photosynthesis is in simple terms.
+A: Imagine a plant as a tiny chef making its own food. 🌿 
+
+Photosynthesis is how plants use sunlight, water, and air (CO2) to make sugar (their food) and release oxygen. ☀️💧🌳
+
+Here's a simplified breakdown:
+Sunlight: Plants use their leaves, which are like solar panels, to capture sunlight.
+Water: They absorb water from the soil through their roots.
+**Air
+Timing: Model=4.762s, TTS=31.257s, Total=36.019s
+
+Q: What are the three states of matter?
+A: The three most common states of matter are:
+
+ Solid: Solids have a fixed shape and volume. Their particles are tightly packed together and vibrate in place.
+ Liquid: Liquids have a fixed volume but take the shape of their container. Their particles are close together but can move around each other.
+Gas: Gases have no fixed shape or volume. Their particles are far apart and move freely.
+
+It's worth noting that there are other states of matter, like
+Timing: Model=4.769s, TTS=29.541s, Total=34.311s
+
+Q: Why do we have seasons?
+A: Seasons are caused by the tilt of Earth's axis as it orbits the sun. 
+
+Here's a breakdown:
+
+ Earth's Tilt:  Earth is tilted on its axis at approximately 23.5 degrees. This tilt means that different parts of the Earth receive varying amounts of sunlight throughout the year.
+ Orbit and Revolution: Earth orbits the sun in an elliptical path, and because of this orbit, different areas of Earth are closer or farther from
+Timing: Model=4.813s, TTS=31.941s, Total=36.755s
+
+Q: What is the largest ocean on Earth?
+A: The largest ocean on Earth is the Pacific Ocean.
+Timing: Model=0.904s, TTS=4.127s, Total=5.032s
+
+Q: How does a car engine work?
+A: Here's a breakdown of how a car engine works:
+The Basics
+
+ Purpose: A car engine converts chemical energy (from gasoline or diesel) into mechanical energy (rotation of the crankshaft) to move the car.
+ Components:
+     Cylinder: A closed chamber where fuel and air are mixed and ignited.
+     Pistons: Cylindrical components that move up and down within the cylinders.
+Connecting Rod: Conne
+Timing: Model=4.796s, TTS=27.575s, Total=32.372s
+
+REASONING
+--------------------------------------------------------------------------------
+
+Q: If I have 5 apples and give away 2, how many do I have left?
+A: You would have 3 apples left.
+Timing: Model=0.872s, TTS=2.123s, Total=2.995s
+
+Q: What comes next in this sequence: 2, 4, 6, 8?
+A: This sequence is simply adding 2 to the previous number. 
+
+The next number is 10.
+Timing: Model=1.403s, TTS=5.920s, Total=7.322s
+
+Q: Which is heavier, a pound of feathers or a pound of bricks?
+A: This is a classic trick question!  😊
+
+They weigh the same. A pound is a unit of weight, so a pound of anything will have the same weight as a pound of something else.
+Timing: Model=2.257s, TTS=12.987s, Total=15.244s
+
+Q: If it takes 5 machines 5 minutes to make 5 widgets, how long would it take 100 machines to make 100 widgets?
+A: This is a classic trick question! 
+
+It would still take 5 minutes. 
+
+Here's why:
+
+ Each machine can independently make one widget in 5 minutes.
+ If you have 100 machines, they're all working simultaneously, so they'll each make a widget in 5 minutes. 
+
+Let me know if you'd like to try another brain teaser!
+Timing: Model=4.223s, TTS=21.744s, Total=25.967s
+
+CONVERSATIONAL
+--------------------------------------------------------------------------------
+
+Q: How are you doing today?
+A: As an AI, I don't have feelings or experiences like humans do.  But I'm here and ready to assist you!  What can I help you with today? 😊
+Timing: Model=2.069s, TTS=11.714s, Total=13.784s
+
+Q: Tell me a fun fact.
+A: Did you know that there's a species of jellyfish that's essentially immortal? 
+
+The Turritopsis dohrnii, also known as the "immortal jellyfish," can revert back to its polyp stage after becoming sexually mature. This means that if it faces a threat to its life, it can essentially rewind its aging process and start all over again. 🤯 
+
+Pretty neat, right?
+Timing: Model=4.068s, TTS=26.038s, Total=30.106s
+
+Q: What's your favorite color?
+A: As an AI, I don't have personal preferences like favorite colors.  
+
+Do you have a favorite color? I'd love to hear about it!  🎨😊
+Timing: Model=2.049s, TTS=10.154s, Total=12.203s
+
+Q: Can you help me with something?
+A: I'd love to!  Please tell me what you need help with.  The more specific you are, the better I can assist you. 😊 
+
+For example, you could ask me:
+
+ To write something: "Can you write a short story about a talking cat?"
+ To answer a question: "What is the capital of France?"
+ To explain something: "Can you explain how photosynthesis works?"
+ To translate something: "Can
+Timing: Model=4.820s, TTS=28.983s, Total=33.804s

@@ -1,0 +1,92 @@
+Course Title: Capstone Design 2025-2
+Capstone Design Video Project Guidelines
+Professor: Rajendra and Abolghasem
+First Draft=PreFinal Due date: 11th Dec. (Thursday), 11:50pm
+Final Version=Final Due date: 15th Dec. (Monday), 11:50pm
+Overview: For this Capstone Design course, you will create a series of hands-on video lectures
+instead of a traditional written project report. Each video should combine theory and practice:
+explain key concepts, then demonstrate them step-by-step (for example, writing and running
+code or operating hardware such as robots or Arduino boards). The goal is to produce polished
+tutorial videos that cover your project in detail. These videos will be used as learning materials
+for future students.
+Video Format and Length: Each video should be edited for clarity and be under 1 hour long.
+Break up longer topics into multiple videos so no single video is too long. In fact, educational
+research suggests that student attention drops sharply after about 15 minutes[1], so keep
+individual segments concise and focused. Use clear screen recordings (e.g. of your code editor,
+slides, or robot interface) and good audio. Avoid simply filming a live presentation with a fixed
+camera – this often leads to poor audio and unreadable visuals[2]. Instead, use screen-capture
+or recording software so that code, slides, and demonstrations are clearly visible.
+Note: The quality of microphone is very important!
+Content Structure: Each video should include the following components: - Introduction: State
+what the video will cover and its objectives. - Theoretical Background: Briefly explain the key
+theory or concepts before the demo. Use diagrams or slides if helpful. - Hands-On
+Demonstration: Show step-by-step how to implement the project tasks. For example, type out
+and explain the code line by line, configure hardware, run tests on the robot, etc. Narrate each
+action clearly. Highlight important details or common pitfalls as you go. - Summary: Conclude
+with the main takeaways and any next steps.
+Strive for a narrative flow: explain why you are doing each step, not just how. Use examples and
+commentary to make the content clear and engaging.
+Supporting Materials: Along with each video, submit all related files in well-organized folders.
+This should include: - Source Code: All code files shown or used in the video. - Documentation:
+Any text (e.g. brief README, comments, schematic diagrams) needed to understand the
+project. You may include text summaries or bullet points, but a formal written report is not
+required. - Additional Resources: Slides, images, datasets, or any other materials referenced in
+the video.
+Label your folders and files clearly so another student can easily find the code corresponding to
+each video segment. These materials will accompany the videos on the class platform.
+Submission and Distribution:
+- Private Submission: Do not upload your videos to public websites. First submit the final edited
+videos and files to the designated folder at Sejong University eCampus or designated dropbox
+for review.
+- Class Platform Only: After approval, the videos will be uploaded to our secure eCampus site
+for student use. They should not be posted on YouTube or any public site.
+- Ensure you meet any technical requirements (format, resolution) specified by the class.
+Sample Tutorials: We encourage you to review example tutorial videos to guide your approach.
+For instance, look for high-quality video-based tutorials on topics similar to your project
+(robotics demos, programming walkthroughs, etc.). These can serve as inspiration for how to
+structure your presentation. If sample project files or code templates are provided by the
+instructor, use them as a starting point. Understanding how others present tutorials will help
+you create engaging content.
+Grading and Evaluation: You will receive a detailed rubric outlining the grading criteria. In
+general, your videos and materials will be evaluated on: - Technical Accuracy (content):
+Correctness and completeness of the theory and implementation demonstrated.
+- Clarity of Presentation: How clearly you explain concepts and steps (logical flow, pacing, and
+explanations).
+- Code Quality and Documentation: Functionality of your code and usefulness of any
+accompanying comments or docs.
+- Production Quality: Audio/visual quality of the video (clear visuals of code/hardware,
+understandable audio, smooth editing).
+- Engagement (hands-on exercise): Effectiveness of the hands-on demonstrations and any
+included exercises.
+For example, the rubric might allocate points roughly as follows: 30% for technical content, 30%
+for code/demo quality, 20% for presentation clarity, and 20% for video production and
+organization. Make sure your videos meet the objectives stated and that all required
+components are covered, as per the rubric provided.
+Best Practices:
+- Plan Carefully: Outline or script your video before recording. Practice key parts to avoid long
+pauses or mistakes.
+- Keep It Engaging: Speak clearly, use visuals (slides, live coding windows, schematics), and
+consider picture-in-picture if it helps (e.g. showing yourself explaining slides).
+- Use Good Audio: Record in a quiet environment with a decent microphone so your voice is
+clear.
+- Edit Thoughtfully: Remove long delays or errors in editing. Add annotations or zoom-ins if it
+clarifies the code/hardware.
+- Active Learning: Where possible, include small tasks or questions at the end of each video to
+reinforce learning (research suggests this boosts engagement[3]).
+- Manage Length: Keep each tutorial focused. If a topic takes longer, break it into shorter parts
+so students stay attentive[1].
+- Practice Professionalism: Treat the video as a real presentation. Dress appropriately, maintain
+good posture, and engage as if you are teaching the material.
+By following these guidelines, you will create a series of clear, useful tutorial videos for your
+Capstone project. These videos and materials will serve as the primary project deliverables and
+learning resources for future students. Ensure you cover all project requirements in a hands-on,
+step-by-step manner, and adhere to the specified format and submission rules. Good luck with
+your Capstone project!
+References: Research on educational videos recommends keeping segments concise and
+including interactive elements[4][2]. (Citations are provided for context; focus on applying the
+guidelines above in your project.)
+[1] [3] [4] @
+http://www.wiete.com.au/journals/WTE&TE/Pages/Vol.17,%20No.2%20(2019)/10-Hertzog-
+P.pdf
+[2] Capstone: Video Best Practices
+https://www.ceias.nau.edu/cs/CS_Capstone/BestPractices/video-best-practice.html

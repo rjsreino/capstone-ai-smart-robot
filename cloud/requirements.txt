@@ -1,0 +1,68 @@
+# HTTP client for async API calls
+httpx==0.28.1
+
+# Serial communication with ESP32 rover controller
+pyserial==3.5
+
+# ============================================================================
+# Oak-D Depth Camera Support
+# ============================================================================
+
+# DepthAI SDK for Oak-D stereo depth camera
+depthai==2.30.0.0
+depthai-nodes==0.3.4
+depthai-pipeline-graph==0.0.5
+depthai-sdk==1.15.1
+
+# ============================================================================
+# AI Model Support (Qwen VLM)
+# ============================================================================
+
+# Qwen VLM and dependencies
+transformers>=4.37.0
+torch>=2.0.0
+torchvision>=0.15.0
+qwen-vl-utils>=0.0.1
+accelerate>=0.20.0
+
+# Image processing for vision
+Pillow>=9.0.0
+
+# Audio processing (local Whisper)
+openai-whisper>=20230314
+piper-tts>=1.2.0
+pydub>=0.25.1  # Audio format conversion (requires ffmpeg)
+
+# Spotify integration
+spotipy>=2.25.0
+
+# Gesture detection
+# WARNING: MediaPipe 0.10.21 has dependency conflicts with TensorFlow 2.20+
+# - MediaPipe requires: protobuf<5,>=4.25.3 and numpy<2
+# - TensorFlow 2.20+ requires: protobuf>=5.28.0 and numpy>=1.26.0
+# These are incompatible. Options:
+# 1. Comment out mediapipe if gesture detection is not needed
+# 2. Use TensorFlow 2.13-2.19 (supports protobuf<5) instead of 2.20+
+# 3. Wait for a newer mediapipe version that supports protobuf 5.x
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+
+# Age estimation (Hugging Face models)
+transformers>=4.30.0
+torch>=2.0.0
+tensorflow>=2.13.0
+huggingface-hub>=0.16.0
+
+# Dependency version constraints
+# Note: There's a fundamental conflict between TensorFlow 2.20+ and MediaPipe 0.10.21
+# TensorFlow 2.20+ requires protobuf>=5.28.0, but MediaPipe requires protobuf<5
+# We prioritize TensorFlow for age detection, so MediaPipe may not work properly
+# If you need MediaPipe, consider downgrading TensorFlow to 2.19.x
+numpy>=1.26.0,<2.0.0
+protobuf>=5.28.0
+
+# Face recognition (using InsightFace - no dlib required!)
+insightface>=0.7.3
+# GPU-accelerated ONNX Runtime (requires CUDA/cuDNN)
+# If GPU not available, use: pip install onnxruntime instead
+onnxruntime-gpu>=1.16.0

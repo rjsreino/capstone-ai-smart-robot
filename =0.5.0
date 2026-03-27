@@ -1,0 +1,40 @@
+Looking in indexes: https://pypi.org/simple, https://www.piwheels.org/simple
+Collecting openwakeword
+  Using cached https://www.piwheels.org/simple/openwakeword/openwakeword-0.6.0-py3-none-any.whl (60 kB)
+Requirement already satisfied: onnxruntime<2,>=1.10.0 in ./venv/lib/python3.13/site-packages (from openwakeword) (1.23.2)
+Collecting tqdm<5.0,>=4.0 (from openwakeword)
+  Using cached https://www.piwheels.org/simple/tqdm/tqdm-4.67.1-py3-none-any.whl (78 kB)
+Collecting scipy<2,>=1.3 (from openwakeword)
+  Using cached scipy-1.16.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl.metadata (62 kB)
+Collecting scikit-learn<2,>=1 (from openwakeword)
+  Using cached scikit_learn-1.8.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl.metadata (11 kB)
+Collecting requests<3,>=2.0 (from openwakeword)
+  Using cached https://www.piwheels.org/simple/requests/requests-2.32.5-py3-none-any.whl (64 kB)
+INFO: pip is looking at multiple versions of openwakeword to determine which version is compatible with other requirements. This could take a while.
+Collecting openwakeword
+  Using cached https://www.piwheels.org/simple/openwakeword/openwakeword-0.5.1-py3-none-any.whl (16.7 MB)
+  Using cached https://www.piwheels.org/simple/openwakeword/openwakeword-0.5.0-py3-none-any.whl (16.7 MB)
+  Downloading https://www.piwheels.org/simple/openwakeword/openwakeword-0.4.0-py3-none-any.whl (9.3 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.3/9.3 MB 2.6 MB/s eta 0:00:00
+Requirement already satisfied: coloredlogs in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (15.0.1)
+Requirement already sat     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 9.3/9.3 MB 924.9 kB/s eta 0:00:00
+
+Requirement already satisfied: coloredlogs in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (15.0.1)
+Requirement already satisfied: flatbuffers in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (25.9.23)
+Requirement already satisfied: numpy>=1.21.6 in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (2.2.6)
+Requirement already satisfied: packaging in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (25.0)
+Requirement already satisfied: protobuf in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (6.33.1)
+Requirement already satisfied: sympy in ./venv/lib/python3.13/site-packages (from onnxruntime<2,>=1.10.0->openwakeword) (1.14.0)
+Collecting joblib>=1.3.0 (from scikit-learn<2,>=1->openwakeword)
+  Using cached https://www.piwheels.org/simple/joblib/joblib-1.5.2-py3-none-any.whl (308 kB)
+Collecting threadpoolctl>=3.2.0 (from scikit-learn<2,>=1->openwakeword)
+  Using cached https://www.piwheels.org/simple/threadpoolctl/threadpoolctl-3.6.0-py3-none-any.whl (18 kB)
+Requirement already satisfied: humanfriendly>=9.1 in ./venv/lib/python3.13/site-packages (from coloredlogs->onnxruntime<2,>=1.10.0->openwakeword) (10.0)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in ./venv/lib/python3.13/site-packages (from sympy->onnxruntime<2,>=1.10.0->openwakeword) (1.3.0)
+Using cached scikit_learn-1.8.0-cp313-cp313-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl (8.6 MB)
+Using cached scipy-1.16.3
+Successfully installed joblib-1.5.2 openwakeword-0.4.0 scikit-learn-1.8.0 scipy-1.16.3 threadpoolctl-3.6.0 tqdm-4.67.1
+tl, scipy, joblib, scikit-learn, openwakeword
+
+
+Successfully installed joblib-1.5.2 openwakeword-0.4.0 scikit-learn-1.8.0 scipy-1.16.3 threadpoolctl-3.6.0 tqdm-4.67.1

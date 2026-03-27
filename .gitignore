@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+logs/
+*.log
+nav_logs/
+
+# Build artifacts
+*.whl
+*.bin
+*.elf
+*.map
+*.bootloader.bin
+*.partitions.bin
+
+# ESP32 build directories
+esp32_firmware/*/General_Driver/build/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+*.wav
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Offload directory (if contains temporary files)
+offload/
+
+api/
+# Piper TTS voice models (download separately)
+models/piper/*.onnx
+models/piper/*.json
+
+# Secrets and credentials
+robot/client_secrets.json

@@ -1,0 +1,25 @@
+[Unit]
+Description=Rovy Smart Assistant
+After=network.target sound.target alsa-state.service
+Wants=network-online.target
+Requires=sound.target
+
+[Service]
+Type=simple
+User=jetson
+Group=jetson
+WorkingDirectory=/home/jetson/rovy
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/usr/bin/python3 /home/jetson/rovy/smart_assistant.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Give the service time to start up
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
+
