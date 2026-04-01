@@ -69,7 +69,11 @@ class FaceRecognizer:
         # Benchmark shows: CNN 0.5x GPU = 0.024s vs HOG 0.5x = 0.039s
         # CNN with GPU at 0.5x scale is 40% faster than HOG!
         detect_start = time.time()
-        face_locations = face_recognition.face_locations(small_frame, model="cnn", number_of_times_to_upsample=0)
+        face_locations = face_recognition.face_locations(
+    small_frame,
+    model="hog",
+    number_of_times_to_upsample=0
+)
         detect_time = time.time() - detect_start
         
         if not face_locations:

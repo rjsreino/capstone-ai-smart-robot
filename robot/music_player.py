@@ -27,7 +27,7 @@ class MusicPlayer:
     YouTube Music player with genre support and dance integration.
     """
     
-    def __init__(self, auth_file: str = "ytmusic_oauth.json"):
+    def __init__(self, auth_file: str = "headers_auth.json"):
         self.auth_file = auth_file
         self.yt_music = None
         self.current_song = None
@@ -151,48 +151,51 @@ class MusicPlayer:
             return False
     
     def _playback_worker(self, url: str):
-        """Worker thread for audio playback."""
         try:
-            # Try mpv first (best option)
-            if self._check_command('mpv'):
-                print("[Music] Using mpv for playback")
-                self.playback_process = subprocess.Popen(
-                    ['mpv', '--no-video', '--volume=70', url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                self.playback_process.wait()
-            
-            # Fallback to yt-dlp + aplay
-            elif self._check_command('yt-dlp'):
-                print("[Music] Using yt-dlp + ffplay for playback")
-                self.playback_process = subprocess.Popen(
-                    ['yt-dlp', '-x', '--audio-format', 'best', '-o', '-', url, '|', 
-                     'ffplay', '-nodisp', '-autoexit', '-'],
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                self.playback_process.wait()
-            
-            else:
-                print("[Music] ⚠️ No playback method available (install mpv or yt-dlp)")
-            
+            mpv_path = r"C:\mpv\mpv.exe"
+
+            print(f"[Music] mpv path: {mpv_path}")
+            print(f"[Music] mpv exists: {os.path.exists(mpv_path)}")
+            print(f"[Music] URL: {url}")
+
+            extract = subprocess.run(
+                ['yt-dlp', '-g', url],
+                capture_output=True,
+                text=True,
+                shell=False
+            )
+
+            if extract.returncode != 0:
+                print(f"[Music] yt-dlp failed:\n{extract.stderr}")
+                return
+
+            lines = [line.strip() for line in extract.stdout.splitlines() if line.strip()]
+            if not lines:
+                print("[Music] yt-dlp returned no stream URL")
+                return
+
+            stream_url = lines[0]
+            print("[Music] Stream URL acquired")
+
+            self.playback_process = subprocess.Popen(
+                [mpv_path, '--no-video', '--volume=70', stream_url],
+                shell=False
+            )
+            self.playback_process.wait()
+            print(f"[Music] mpv exit code: {self.playback_process.returncode}")
+
         except Exception as e:
             print(f"[Music] Playback error: {e}")
-        
+
         finally:
             self.is_playing = False
             self.current_song = None
             self.playback_process = None
     
     def _check_command(self, cmd: str) -> bool:
-        """Check if a command exists."""
-        try:
-            subprocess.run(['which', cmd], capture_output=True, check=True)
-            return True
-        except:
-            return False
+        if cmd == 'mpv':
+            return os.path.exists(r"C:\mpv\mpv.exe")
+        return False
     
     def stop(self):
         """Stop current playback."""

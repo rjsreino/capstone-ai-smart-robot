@@ -49,7 +49,7 @@ for name in known_faces:
 print("\n[Test 3] Testing face recognition...")
 import cv2
 known_faces_dir = project_root / "known-faces"
-test_image = known_faces_dir / "boymirzo.jpg"
+test_image = known_faces_dir / "reino.jpg"
 
 if test_image.exists():
     print(f"   Testing with: {test_image.name}")

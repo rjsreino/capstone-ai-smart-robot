@@ -35,34 +35,44 @@ class TranscriptionTester:
         self.running = False
     
     def _find_microphone(self):
-        """Find audio input device and update sample rate."""
         device_count = self.pyaudio.get_device_count()
         print(f"\nℹ️  Scanning {device_count} audio devices...")
         
+        target = "HyperX"  # target mic
+
+        fallback = None
+
         for i in range(device_count):
             try:
                 info = self.pyaudio.get_device_info_by_index(i)
+                name = info.get('name', '')
                 max_input = info.get('maxInputChannels', 0)
-                
-                # Debug: print all devices
-                print(f"   Device {i}: {info.get('name', 'Unknown')} - Input channels: {max_input}")
-                
+
+                print(f"   Device {i}: {name} - Input channels: {max_input}")
+
                 if max_input > 0:
-                    # Get the device's native sample rate
-                    native_rate = int(info.get('defaultSampleRate', 44100))
-                    print(f"\n✅ Using microphone: {info['name']} (index {i})")
-                    print(f"   Native sample rate: {native_rate}Hz\n")
-                    # Update device sample rate to match what device supports
-                    self.device_sample_rate = native_rate
-                    return i
+                    # simpan fallback kalau belum ketemu target
+                    if fallback is None:
+                        fallback = i
+
+                    # pilih kalau nama cocok
+                    if target in name:
+                        native_rate = int(info.get('defaultSampleRate', 44100))
+                        print(f"\n✅ Using microphone: {name} (index {i})")
+                        print(f"   Native sample rate: {native_rate}Hz\n")
+                        self.device_sample_rate = native_rate
+                        return i
+
             except Exception as e:
                 print(f"   Error checking device {i}: {e}")
-                continue
-        
-        print("\n⚠️  No microphone found with input channels")
-        print("   Attempting to use default device...\n")
+
+        print("\n⚠️  Target mic not found, using fallback\n")
+
+        if fallback is not None:
+            return fallback
+
         return None
-        
+            
     async def test_transcription(self, duration: float = 30.0):
         """Test transcription for a specified duration"""
         
@@ -125,7 +135,7 @@ class TranscriptionTester:
                 print(f"\n❌ Error: {error}")
                 self.running = False
             
-            async def on_close(connection, close_msg, **kwargs):
+            async def on_close(connection, *args, **kwargs):
                 print(f"\nℹ️  Connection closed")
                 self.running = False
             
