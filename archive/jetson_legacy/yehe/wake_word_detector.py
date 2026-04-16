@@ -12,9 +12,12 @@ import whisper
 import pyttsx3
 import subprocess
 WAKE_WORDS = [
+    "kevin",
     "hey kevin",
     "hello kevin",
-    "kevin"
+    "okay kevin",
+    "hello mario"
+    "jack"
 ]
 MIC_INDEX = 1
 SAMPLE_RATE = 16000
@@ -22,15 +25,14 @@ CHANNELS = 1
 FORMAT = pyaudio.paInt16
 FRAME_SIZE = 1280
 
-CHUNK_DURATION = 0.5
-SILENCE_THRESHOLD = 200
+CHUNK_DURATION = 0.25
 SILENCE_DURATION = 2.0
-START_SPEECH_THRESHOLD = 300
-MIN_COMMAND_SECONDS = 1.0
+MIN_COMMAND_SECONDS = 1.2
+SILENCE_THRESHOLD = 200
+START_SPEECH_THRESHOLD = 220
 
-WAKE_WORDS = ["hey viko", "hey vicko", "vicko", "vico", "viko", "hey viko","hey fico","hey ficko","hello viko","hello vicko","hello ficko","hello fico","hey,fiko!","hey fiko!","hey fiko","hello kevin"]
 
-whisper_model = whisper.load_model("base")
+whisper_model = whisper.load_model("medium")
 tts_engine = pyttsx3.init()
 
 
@@ -154,7 +156,12 @@ def normalize_text(text: str) -> str:
 
 def contains_wake_word(text: str) -> bool:
     normalized = normalize_text(text)
-    return any(w in normalized for w in WAKE_WORDS)
+
+    for w in WAKE_WORDS:
+        pattern = r"\b" + re.escape(w) + r"\b"
+        if re.search(pattern, normalized):
+            return True
+    return False
 
 
 def remove_wake_word(text: str) -> str:
@@ -239,6 +246,7 @@ def handle_command(command: str):
         or "start vision" in command
         or "open vision" in command
         or "camera mode" in command
+        or ""
         or "see mode" in command ):
         speak("Starting live vision assistant.")
         try:
@@ -295,7 +303,7 @@ def main():
                 command = remove_wake_word(transcript)
 
                 if not command:
-                    speak("Hi, I'm Viko. Ready.")
+                    speak("Hi, I'm Kevin. Ready.")
                 else:
                     handle_command(command)
 

@@ -8,6 +8,7 @@ import wave
 import signal
 import sys
 import re
+import easyocr
 
 from llm_reasoner import ask_llm
 
@@ -15,7 +16,8 @@ import numpy as np
 import pyaudio
 import soundfile as sf
 import whisper
-
+latest_ocr_text = ""
+latest_ocr_time = 0.0
 # =========================
 # CAMERA / MODEL CONFIG
 # =========================
@@ -79,16 +81,45 @@ ALLOWED_CLASSES = {
 # =========================
 # STATE
 # =========================
+
 latest_detections = []
+latest_frame = None
+
+last_response_text = ""
+last_response_type = ""
+last_response_time = 0.0
+
 frame_lock = threading.Lock()
 running = True
 
 whisper_model = whisper.load_model("base")
+ocr_reader = easyocr.Reader(["en"], gpu=True)
 
 
 # =========================
 # UTILS
 # =========================
+
+def remember_response(text, response_type="general"):
+    global last_response_text, last_response_type, last_response_time
+
+    last_response_text = text
+    last_response_type = response_type
+    last_response_time = time.time()
+
+
+def is_repeat_command(command):
+    repeat_keywords = [
+        "repeat",
+        "say again",
+        "one more time",
+        "repeat it",
+        "repeat that",
+        "can you repeat",
+        "say it again"
+    ]
+
+    return any(k in command for k in repeat_keywords)
 def handle_interrupt(sig, frame):
     global running
     running = False
@@ -265,7 +296,7 @@ def transcribe_audio(wav_buffer: io.BytesIO) -> str:
 # VISION LOOP
 # =========================
 def vision_loop():
-    global latest_detections, running
+    global latest_detections, latest_frame, running
 
     model = YOLO(MODEL_PATH)
 
@@ -384,6 +415,7 @@ def vision_loop():
 
         with frame_lock:
             latest_detections = detections
+            latest_frame = frame.copy()
 
         cv2.imshow(WINDOW_NAME, annotated)
 
@@ -395,11 +427,65 @@ def vision_loop():
     cap.release()
     cv2.destroyAllWindows()
 
+def extract_text_from_frame(frame):
+    print("[OCR] Function called")
 
+    if frame is None:
+        print("[OCR] Frame is None")
+        return ""
+
+    h, w = frame.shape[:2]
+
+    # fokus ke area tengah
+    x1 = int(w * 0.15)
+    x2 = int(w * 0.85)
+    y1 = int(h * 0.15)
+    y2 = int(h * 0.75)
+
+    roi = frame[y1:y2, x1:x2]
+
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    results = ocr_reader.readtext(thresh)
+    print("[OCR RAW RESULTS]", results)
+
+    lines = []
+    for r in results:
+        _, text, conf = r
+        text = text.strip()
+
+        # buang text terlalu pendek atau confidence terlalu rendah
+        if len(text) < 3:
+            continue
+        if conf < 0.30:
+            continue
+
+        lines.append((text, conf))
+
+    print("[OCR FILTERED LINES]", lines)
+
+    if not lines:
+        return ""
+
+    # ambil text unik saja
+    final_lines = []
+    seen = set()
+
+    for text, conf in lines:
+        lower = text.lower()
+        if lower not in seen:
+            seen.add(lower)
+            final_lines.append(text)
+
+    return " ".join(final_lines)
 # =========================
 # LLM REASONING
 # =========================
-def handle_vision_query(command: str, detections: list[dict]) -> str:
+def handle_vision_query(command: str, detections: list[dict], frame):
+    global last_response_text
+
     command = normalize_text(command)
 
     if command in {"stop", "exit", "quit"}:
@@ -408,6 +494,92 @@ def handle_vision_query(command: str, detections: list[dict]) -> str:
     if "stop vision mode" in command or "exit vision mode" in command:
         return "__EXIT__"
 
+    if is_repeat_command(command):
+        if last_response_text:
+            return last_response_text
+        return "There is nothing recent to repeat."
+
+    # OCR intent
+    if (
+        "read" in command
+        or "text" in command
+        or "sign" in command
+        or "menu" in command
+        or "room number" in command
+        or "what does this say" in command
+    ):
+        extracted_text = extract_text_from_frame(frame)
+
+        if extracted_text:
+            answer = f"The text says: {extracted_text}"
+            remember_response(answer, "ocr")
+            return answer
+
+        return "I cannot read any clear text right now."
+
+    # FRONT OBJECT intent
+    if (
+        "what is in front of me" in command
+        or "what s in front of me" in command
+        or "what is it in front of me" in command
+        or "what is ahead of me" in command
+        or "what is right in front of me" in command
+    ):
+        center_objects = [d for d in detections if d["position"] == "center"]
+
+        if center_objects:
+            main = center_objects[0]
+            answer = f"There is a {main['class_name']} in front of you. It is {main['distance']}."
+            remember_response(answer, "vision")
+            return answer
+
+        if detections:
+            main = detections[0]
+            answer = f"The nearest visible object is a {main['class_name']} on the {main['position']}."
+            remember_response(answer, "vision")
+            return answer
+
+        return "I do not detect any major object in front of you."
+
+    # SCENE intent
+    if "what do you see" in command or "describe scene" in command:
+        if not detections:
+            answer = "I do not detect any major object."
+            remember_response(answer, "vision")
+            return answer
+
+        names = []
+        seen = set()
+        for d in detections:
+            if d["class_name"] not in seen:
+                seen.add(d["class_name"])
+                names.append(d["class_name"])
+
+        if len(names) == 1:
+            answer = f"I see a {names[0]}."
+        elif len(names) == 2:
+            answer = f"I see a {names[0]} and a {names[1]}."
+        else:
+            answer = "I see " + ", ".join(f"a {x}" for x in names[:-1]) + f", and a {names[-1]}."
+
+        remember_response(answer, "vision")
+        return answer
+
+    # PATH intent
+    if "is the path clear" in command or "can i move forward" in command:
+        blockers = [d for d in detections if d["position"] == "center"]
+
+        if blockers:
+            main = blockers[0]
+            answer = f"The path ahead is blocked by a {main['class_name']}."
+            remember_response(answer, "vision")
+            return answer
+
+        answer = "The path ahead appears clear."
+        remember_response(answer, "vision")
+        return answer
+
+    # LLM fallback
     try:
         llm_input = []
         for d in detections:
@@ -418,15 +590,13 @@ def handle_vision_query(command: str, detections: list[dict]) -> str:
                 "confidence": round(d["confidence"], 2)
             })
 
-        if not llm_input:
-            llm_input = []
-
-        return ask_llm(command, llm_input)
+        answer = ask_llm(command, llm_input)
+        remember_response(answer, "llm")
+        return answer
 
     except Exception as e:
         print("[LLM ERROR]", e)
         return "I could not process that question right now."
-
 
 # =========================
 # VOICE LOOP
@@ -479,9 +649,9 @@ def voice_loop():
 
             with frame_lock:
                 detections_copy = list(latest_detections)
+                frame_copy = None if latest_frame is None else latest_frame.copy()
 
-            answer = handle_vision_query(command, detections_copy)
-
+            answer = handle_vision_query(command, detections_copy, frame_copy)
             if answer == "__EXIT__":
                 speak_windows_tts("Stopping live vision assistant.")
                 running = False
