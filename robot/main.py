@@ -57,7 +57,7 @@ except Exception as e:
     print(f"WARNING: Rover not available: {e}")
 
 try:
-    from wake_word_detector import WakeWordDetector
+    from archive.jetson_legacy.yehe.wake_word_detector import WakeWordDetector
     WAKE_WORD_OK = True
 except Exception as e:
     WAKE_WORD_OK = False

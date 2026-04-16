@@ -1,0 +1,84 @@
+path: W:/University/Capstone/capstone-ai-smart-robot/archive/jetson_legacy/yehe/dataset_yolo
+train: images/train
+val: images/val
+
+names:
+  0: person
+  1: chair
+  2: bottle
+  3: person
+  4: cup
+  5: spoon
+  6: bowl
+  7: chair
+  8: tie
+  9: cell phone
+  10: wine glass
+  11: vase
+  12: refrigerator
+  13: bicycle
+  14: car
+  15: umbrella
+  16: pizza
+  17: knife
+  18: baseball bat
+  19: sports ball
+  20: motorcycle
+  21: backpack
+  22: baseball glove
+  23: dog
+  24: oven
+  25: donut
+  26: handbag
+  27: train
+  28: remote
+  29: sink
+  30: book
+  31: fork
+  32: tennis racket
+  33: orange
+  34: laptop
+  35: keyboard
+  36: couch
+  37: cake
+  38: teddy bear
+  39: potted plant
+  40: truck
+  41: bench
+  42: tv
+  43: microwave
+  44: banana
+  45: mouse
+  46: carrot
+  47: broccoli
+  48: sandwich
+  49: apple
+  50: hot dog
+  51: parking meter
+  52: airplane
+  53: bed
+  54: skis
+  55: bird
+  56: boat
+  57: surfboard
+  58: bus
+  59: traffic light
+  60: toilet
+  61: skateboard
+  62: scissors
+  63: elephant
+  64: frisbee
+  65: horse
+  66: kite
+  67: sheep
+  68: fire hydrant
+  69: suitcase
+  70: cat
+  71: snowboard
+  72: zebra
+  73: toothbrush
+  74: cow
+  75: giraffe
+  76: toaster
+path: W:\University\Capstone\capstone-ai-smart-robot\archive\jetson_legacy\yehe\dataset_yolo
+val: .\images\val\
