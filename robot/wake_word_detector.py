@@ -1,406 +1,234 @@
-#!/usr/bin/env python3
-"""
-Wake Word Detector using Silero VAD + Faster-Whisper
-Configured for wake word: "hey tom" / "tom"
-Forces preferred microphone selection toward HyperX QuadCast.
-"""
-
+import io
+import wave
+import signal
+import sys
 import time
-import logging
-from typing import Optional, Callable
+
 import numpy as np
-import difflib
-
-try:
-    import pyaudio
-    PYAUDIO_OK = True
-except ImportError:
-    PYAUDIO_OK = False
-    print("ERROR: PyAudio not installed. Run: pip install pyaudio")
-
-try:
-    import torch
-    torch.set_num_threads(4)
-    TORCH_OK = True
-except ImportError:
-    TORCH_OK = False
-    print("ERROR: torch not installed. Run: pip install torch")
-
-try:
-    from faster_whisper import WhisperModel
-    WHISPER_OK = True
-except ImportError:
-    WHISPER_OK = False
-    print("ERROR: faster-whisper not installed. Run: pip install faster-whisper")
-
-logger = logging.getLogger(__name__)
+import pyaudio
+import soundfile as sf
+import whisper
+import pyttsx3
 
 
-class WakeWordDetector:
-    def __init__(
-        self,
-        wake_words: list = None,
-        sample_rate: int = 16000,
-        device_sample_rate: Optional[int] = None,
-        device_index: Optional[int] = None,
-        vad_threshold: float = 0.35,
-        whisper_model: str = "base",
-        whisper_device: str = "cpu",
-        whisper_compute_type: str = "int8",
-        min_speech_duration: float = 0.2,
-        min_silence_duration: float = 0.8,
-    ):
-        if not PYAUDIO_OK:
-            raise RuntimeError("PyAudio not available. Install: pip install pyaudio")
-        if not TORCH_OK:
-            raise RuntimeError("Torch not available. Install: pip install torch")
-        if not WHISPER_OK:
-            raise RuntimeError("faster-whisper not available. Install: pip install faster-whisper")
+MIC_INDEX = 1
+SAMPLE_RATE = 16000
+CHANNELS = 1
+FORMAT = pyaudio.paInt16
+FRAME_SIZE = 1280
 
-        self.wake_words = [w.lower().strip() for w in (wake_words or ["hey tom", "tom", "hey thom", "thom"])]
-        self.sample_rate = sample_rate
-        self.device_sample_rate = device_sample_rate or sample_rate
-        self.needs_resampling = self.device_sample_rate != self.sample_rate
-        self.device_index = device_index
-        self.vad_threshold = vad_threshold
-        self.min_speech_duration = min_speech_duration
-        self.min_silence_duration = min_silence_duration
+CHUNK_DURATION = 0.5
+SILENCE_THRESHOLD = 200
+SILENCE_DURATION = 2.0
+START_SPEECH_THRESHOLD = 300
+MIN_COMMAND_SECONDS = 1.0
 
-        logger.info(f"Initializing WakeWordDetector for: {self.wake_words}")
+WAKE_WORDS = ["hey viko", "hey vicko", "vicko", "vico", "viko", "hey viko","hey fico","hey ficko","hello viko","hello vicko","hello ficko","hello fico","hey,fiko!","hey fiko!","hey fiko"]
 
-        self.pyaudio = pyaudio.PyAudio()
+whisper_model = whisper.load_model("base")
+tts_engine = pyttsx3.init()
 
-        if self.device_index is None:
-            self.device_index = self._find_microphone()
-        else:
-            info = self.pyaudio.get_device_info_by_index(self.device_index)
-            self.device_sample_rate = int(info.get("defaultSampleRate", 48000))
-            self.needs_resampling = self.device_sample_rate != self.sample_rate
-            logger.info(
-                f"Using manually selected audio device: {info.get('name', 'Unknown')} "
-                f"(index {self.device_index}, {self.device_sample_rate}Hz)"
-            )
 
-        logger.info(f"Using audio device index: {self.device_index}")
-        if self.needs_resampling:
-            logger.info(f"Audio: {self.device_sample_rate}Hz (device) -> {self.sample_rate}Hz (processing)")
-        else:
-            logger.info(f"Audio: {self.sample_rate}Hz")
+def handle_interrupt(sig, frame):
+    print("\nExiting...")
+    sys.exit(0)
 
-        logger.info("Loading Silero VAD model...")
-        import silero_vad
-        self.vad_model = silero_vad.load_silero_vad()
-        logger.info("✅ Silero VAD loaded")
 
-        logger.info(f"Loading Whisper {whisper_model} model...")
-        self.whisper_model = WhisperModel(
-            whisper_model,
-            device=whisper_device,
-            compute_type=whisper_compute_type,
-            cpu_threads=4,
-            num_workers=1,
-        )
-        logger.info(f"✅ Whisper {whisper_model} loaded")
+signal.signal(signal.SIGINT, handle_interrupt)
 
-        self.stream = None
-        self.running = False
 
-    def _find_microphone(self) -> int:
-        """
-        Prefer HyperX QuadCast. Never choose camera mics or Sound Mapper if avoidable.
-        """
-        device_count = self.pyaudio.get_device_count()
-        print(f"\nℹ️  Scanning {device_count} audio devices...\n")
+def speak(text: str):
+    print(f"Assistant: {text}")
+    tts_engine.say(text)
+    tts_engine.runAndWait()
 
-        preferred_keywords = [
-            "hyperx",
-            "quadcast",
-            "quad cast",
-            "hyper x",
-        ]
-        banned_keywords = [
-            "streamplify",
-            "cam mic",
-            "camera",
-            "sound mapper",
-        ]
 
-        candidates = []
+def listen_for_speech_gate(pa: pyaudio.PyAudio):
+    stream = pa.open(
+        rate=SAMPLE_RATE,
+        channels=1,
+        format=FORMAT,
+        input=True,
+        input_device_index=MIC_INDEX,
+        frames_per_buffer=FRAME_SIZE
+    )
 
-        for i in range(device_count):
-            try:
-                info = self.pyaudio.get_device_info_by_index(i)
-                name = info.get("name", "")
-                name_lower = name.lower()
-                max_input = int(info.get("maxInputChannels", 0))
-                native_rate = int(info.get("defaultSampleRate", 44100))
+    print("Listening for wake word...")
 
-                print(f"   Device {i}: {name} - Input channels: {max_input} - Rate: {native_rate}Hz")
+    try:
+        while True:
+            data = stream.read(FRAME_SIZE, exception_on_overflow=False)
+            pcm = np.frombuffer(data, dtype=np.int16)
+            volume = np.abs(pcm).mean()
 
-                if max_input <= 0:
-                    continue
+            if volume > START_SPEECH_THRESHOLD:
+                print("Speech started.")
+                return
+    finally:
+        stream.stop_stream()
+        stream.close()
 
-                candidates.append((i, name, name_lower, native_rate))
 
-            except Exception as e:
-                print(f"   Error checking device {i}: {e}")
+def record_until_silence(
+    pa: pyaudio.PyAudio,
+    sample_rate: int = SAMPLE_RATE,
+    chunk_duration: float = CHUNK_DURATION,
+    silence_threshold: int = SILENCE_THRESHOLD,
+    silence_duration: float = SILENCE_DURATION
+) -> io.BytesIO:
+    chunk_size = int(sample_rate * chunk_duration)
 
-        print("")
+    stream = pa.open(
+        rate=sample_rate,
+        channels=1,
+        format=FORMAT,
+        input=True,
+        input_device_index=MIC_INDEX,
+        frames_per_buffer=chunk_size
+    )
 
-        for i, name, name_lower, native_rate in candidates:
-            if any(k in name_lower for k in preferred_keywords):
-                print(f"✅ USING QUADCAST CANDIDATE: {name} (index {i})")
-                print(f"   Native sample rate: {native_rate}Hz\n")
-                self.device_sample_rate = native_rate
-                self.needs_resampling = self.device_sample_rate != self.sample_rate
-                return i
+    print("Recording...")
+    frames = []
+    silence_chunks_needed = int(silence_duration / chunk_duration)
+    silent_chunks = 0
 
-        for i, name, name_lower, native_rate in candidates:
-            if not any(k in name_lower for k in banned_keywords):
-                print(f"⚠️ QuadCast name not matched. Using best non-banned mic: {name} (index {i})")
-                print(f"   Native sample rate: {native_rate}Hz\n")
-                self.device_sample_rate = native_rate
-                self.needs_resampling = self.device_sample_rate != self.sample_rate
-                return i
+    try:
+        while True:
+            data = stream.read(chunk_size, exception_on_overflow=False)
+            frames.append(data)
 
-        raise RuntimeError("❌ No usable microphone found.")
+            audio_np = np.frombuffer(data, dtype=np.int16)
+            volume = np.abs(audio_np).mean()
 
-    def _detect_speech(self, audio_chunk: np.ndarray) -> bool:
-        try:
-            if self.needs_resampling:
-                decimation_factor = max(1, int(self.device_sample_rate / self.sample_rate))
-                audio_chunk = audio_chunk[::decimation_factor]
-
-            required_samples = 512 if self.sample_rate == 16000 else 256
-            if len(audio_chunk) < required_samples:
-                audio_chunk = np.pad(audio_chunk, (0, required_samples - len(audio_chunk)), mode="constant")
-            elif len(audio_chunk) > required_samples:
-                audio_chunk = audio_chunk[:required_samples]
-
-            audio_float = audio_chunk.astype(np.float32) / 32768.0
-            audio_tensor = torch.from_numpy(audio_float)
-            speech_prob = self.vad_model(audio_tensor, self.sample_rate).item()
-            return speech_prob >= self.vad_threshold
-        except Exception as e:
-            logger.error(f"VAD error: {e}")
-            return False
-
-    def _transcribe_audio(self, audio_data: np.ndarray) -> Optional[str]:
-        try:
-            if self.needs_resampling:
-                decimation_factor = max(1, int(self.device_sample_rate / self.sample_rate))
-                audio_data = audio_data[::decimation_factor]
-
-            audio_float = audio_data.astype(np.float32) / 32768.0
-
-            segments, _ = self.whisper_model.transcribe(
-                audio_float,
-                language="en",
-                beam_size=3,
-                best_of=3,
-                vad_filter=False,
-                without_timestamps=True,
-            )
-
-            text = " ".join(seg.text for seg in segments).strip()
-            return text if text else None
-        except Exception as e:
-            logger.error(f"Whisper error: {e}")
-            return None
-
-    def _normalize_text(self, text: str) -> str:
-        cleaned = "".join(ch if ch.isalnum() or ch.isspace() else " " for ch in text.lower())
-        return " ".join(cleaned.split())
-
-    def _check_wake_word(self, text: str) -> bool:
-        if not text:
-            return False
-
-        normalized = self._normalize_text(text)
-        words = normalized.split()
-        logger.info(f"📝 Heard: '{normalized}'")
-
-        for wake_word in self.wake_words:
-            wake_norm = self._normalize_text(wake_word)
-
-            if wake_norm in normalized:
-                return True
-
-            wake_parts = wake_norm.split()
-            if len(wake_parts) == 1:
-                target = wake_parts[0]
-                for word in words:
-                    ratio = difflib.SequenceMatcher(None, target, word).ratio()
-                    if ratio >= 0.8:
-                        logger.info(f"✅ Close match: '{word}' ~ '{target}' ({ratio:.2f})")
-                        return True
-
-        return False
-
-    def listen_for_wake_word(
-        self,
-        callback: Optional[Callable[[str], None]] = None,
-        timeout: Optional[float] = None,
-    ) -> bool:
-        logger.info(f"👂 Listening for wake words: {self.wake_words}")
-
-        self.running = True
-        start_time = time.time()
-
-        try:
-            required_samples_after_resample = 512 if self.sample_rate == 16000 else 256
-            if self.needs_resampling:
-                decimation_factor = max(1, int(self.device_sample_rate / self.sample_rate))
-                chunk_samples = required_samples_after_resample * decimation_factor
+            if volume < silence_threshold:
+                silent_chunks += 1
             else:
-                chunk_samples = required_samples_after_resample
+                silent_chunks = 0
 
-            self.stream = self.pyaudio.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=self.device_sample_rate,
-                input=True,
-                input_device_index=self.device_index,
-                frames_per_buffer=chunk_samples,
-            )
+            if silent_chunks >= silence_chunks_needed:
+                break
+    finally:
+        stream.stop_stream()
+        stream.close()
 
-            speech_buffer = []
-            is_speaking = False
-            silence_start = None
-            speech_start = None
+    wav_buffer = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sample_rate)
+        wf.writeframes(b"".join(frames))
 
-            while self.running:
-                if timeout and (time.time() - start_time) > timeout:
-                    logger.info("⏱️ Wake word detection timeout")
-                    return False
+    wav_buffer.seek(0)
+    return wav_buffer
 
-                audio_bytes = self.stream.read(chunk_samples, exception_on_overflow=False)
-                audio_chunk = np.frombuffer(audio_bytes, dtype=np.int16)
 
-                has_speech = self._detect_speech(audio_chunk)
+def transcribe_audio(wav_buffer: io.BytesIO) -> str:
+    audio_array, sample_rate = sf.read(wav_buffer, dtype="float32")
 
-                if has_speech:
-                    if not is_speaking:
-                        is_speaking = True
-                        speech_start = time.time()
-                        speech_buffer = []
-                        logger.info("🗣️ Speech started")
+    if len(audio_array.shape) > 1:
+        audio_array = np.mean(audio_array, axis=1)
 
-                    speech_buffer.append(audio_chunk)
-                    silence_start = None
+    if sample_rate != 16000:
+        import librosa
+        audio_array = librosa.resample(audio_array, orig_sr=sample_rate, target_sr=16000)
+
+    audio_array = whisper.pad_or_trim(audio_array)
+    mel = whisper.log_mel_spectrogram(audio_array).to(whisper_model.device)
+
+    options = whisper.DecodingOptions(language="en", fp16=False)
+    result = whisper.decode(whisper_model, mel, options)
+    return result.text.strip()
+
+
+def contains_wake_word(text: str) -> bool:
+    normalized = text.lower().strip()
+    return any(w in normalized for w in WAKE_WORDS)
+
+
+def remove_wake_word(text: str) -> str:
+    cleaned = text.lower()
+    for w in WAKE_WORDS:
+        cleaned = cleaned.replace(w, "")
+    return cleaned.strip()
+
+
+def handle_command(command: str):
+    if not command:
+        speak("Hi, I'm Viko. Ready.")
+        return
+
+    command = command.lower()
+
+    if "hello" in command or "hi" in command:
+        speak("Hello.")
+    
+    elif "time" in command:
+        import datetime as dt
+        now = dt.datetime.now().strftime("%H:%M")
+        speak(f"The time is {now}.")
+    
+    elif "name" in command:
+        speak("I'm Viko.")
+    
+    elif "stop" in command or "exit" in command:
+        speak("Stopping.")
+        raise SystemExit
+    
+    else:
+        # 🔥 INI YANG DIGANTI
+        speak("Hello, Im Vicko.")
+
+
+def main():
+    pa = pyaudio.PyAudio()
+
+    try:
+        while True:
+            listen_for_speech_gate(pa)
+
+            raw_audio = record_until_silence(pa, SAMPLE_RATE)
+
+            raw_audio.seek(0, io.SEEK_END)
+            size_in_bytes = raw_audio.tell()
+            raw_audio.seek(0)
+
+            approx_num_samples = size_in_bytes // 2
+            approx_seconds = approx_num_samples / SAMPLE_RATE
+
+            if approx_seconds < MIN_COMMAND_SECONDS:
+                print("Too short.")
+                time.sleep(0.2)
+                continue
+
+            try:
+                transcript = transcribe_audio(raw_audio)
+            except Exception as e:
+                print(f"Transcription error: {e}")
+                time.sleep(0.2)
+                continue
+
+            if not transcript:
+                print("No speech recognized.")
+                time.sleep(0.2)
+                continue
+
+            print(f"You said: {transcript}")
+
+            if contains_wake_word(transcript):
+                print("Wake word detected.")
+
+                command = remove_wake_word(transcript)
+
+                if not command:
+                    speak("Hi, I'm Viko. Ready.")
                 else:
-                    if is_speaking:
-                        if silence_start is None:
-                            silence_start = time.time()
+                    handle_command(command)
 
-                        silence_duration = time.time() - silence_start
-                        if silence_duration >= self.min_silence_duration:
-                            speech_duration = time.time() - speech_start
-                            if speech_duration >= self.min_speech_duration and speech_buffer:
-                                logger.info(f"🎤 Processing speech ({speech_duration:.2f}s)")
-                                audio_data = np.concatenate(speech_buffer)
-                                text = self._transcribe_audio(audio_data)
-
-                                if text and self._check_wake_word(text):
-                                    logger.info("✅ Wake word detected!")
-                                    if callback:
-                                        callback(text)
-                                    return True
-
-                            is_speaking = False
-                            speech_buffer = []
-                            silence_start = None
-                            speech_start = None
-
-        except KeyboardInterrupt:
-            logger.info("Wake word detection interrupted")
-            return False
-        finally:
-            if self.stream:
-                try:
-                    self.stream.stop_stream()
-                    self.stream.close()
-                except Exception:
-                    pass
-                self.stream = None
-
-        return False
-
-    def record_query(self, duration: float) -> bytes:
-        logger.info(f"🎙️ Recording query for {duration}s...")
-
-        try:
-            if not self.stream:
-                self.stream = self.pyaudio.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=self.device_sample_rate,
-                    input=True,
-                    input_device_index=self.device_index,
-                    frames_per_buffer=1024,
-                )
-
-            frames = []
-            num_chunks = int(self.device_sample_rate / 1024 * duration)
-
-            for _ in range(num_chunks):
-                data = self.stream.read(1024, exception_on_overflow=False)
-                frames.append(data)
-
-            audio_bytes = b"".join(frames)
-            logger.info(f"✅ Recorded {len(audio_bytes)} bytes")
-            return audio_bytes
-        except Exception as e:
-            logger.error(f"Recording error: {e}")
-            return b""
-
-    def stop(self):
-        self.running = False
-        if self.stream:
-            try:
-                self.stream.stop_stream()
-                self.stream.close()
-            except Exception:
-                pass
-            self.stream = None
-
-    def cleanup(self):
-        self.stop()
-        if hasattr(self, "pyaudio") and self.pyaudio:
-            try:
-                self.pyaudio.terminate()
-            except Exception:
-                pass
-        logger.info("Wake word detector cleaned up")
+    except KeyboardInterrupt:
+        print("Stopping...")
+    finally:
+        pa.terminate()
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    detector = WakeWordDetector(
-        wake_words=["hey tom", "tom", "hey thom", "thom"],
-        sample_rate=16000,
-        whisper_model="base",
-    )
-
-    try:
-        print("\n🎤 Say 'Hey Tom' to test...")
-        print("Press Ctrl+C to exit\n")
-
-        while True:
-            detected = detector.listen_for_wake_word(timeout=30)
-
-            if detected:
-                print("\n✅ Wake word detected! Recording query...")
-                audio = detector.record_query(5.0)
-                print(f"✅ Recorded {len(audio)} bytes\n")
-            else:
-                print("No wake word detected, listening again...")
-
-    except KeyboardInterrupt:
-        print("\n\nExiting...")
-    finally:
-        detector.cleanup()
+    main()
