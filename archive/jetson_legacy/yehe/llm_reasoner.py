@@ -2,38 +2,49 @@ import json
 from ollama import chat
 
 SYSTEM_PROMPT = """
-You are an assistive vision robot.
+You are an assistive navigation AI.
 
 Rules:
 1. Answer in one short sentence only.
-2. Use only the provided detections.
-3. Do not mention OCR unless OCR text is explicitly provided in the prompt.
-4. Do not guess actions, emotions, intentions, or future behavior.
-5. If no relevant object is present, say so directly.
-6. No extra explanation.
-7. No safety advice.
-8. No assumptions.
+2. Use only the provided context.
+3. Prefer the direction with fewer close obstacles.
+4. Do not invent objects or distances.
+5. Do not mention OCR unless OCR text exists.
 """
 
-def ask_llm(question: str, detections: list[dict], ocr_text: str = "") -> str:
+def ask_llm(
+    question: str,
+    detections: list[dict],
+    direction_summary: dict | None = None,
+    scene_mode: str = "navigation assistance",
+    goal: str = "help the user move safely",
+    ocr_text: str = "",
+) -> str:
     payload = {
         "question": question,
+        "scene_mode": scene_mode,
+        "goal": goal,
         "detections": detections,
-        "ocr_text": ocr_text
     }
 
-    user_prompt = json.dumps(payload, ensure_ascii=False, indent=2)
+    if direction_summary:
+        payload["direction_summary"] = direction_summary
+
+    if ocr_text.strip():
+        payload["ocr_text"] = ocr_text
 
     response = chat(
         model="phi3",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": json.dumps(payload, ensure_ascii=False, indent=2)}
         ],
         options={
-            "temperature": 0.1,
-            "num_predict": 30
+            "temperature": 0.0,
+            "num_predict": 20
         }
     )
 
     return response.message.content.strip()
+
+  
