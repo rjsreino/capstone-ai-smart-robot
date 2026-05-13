@@ -11,12 +11,14 @@ import re
 import os
 import queue
 from typing import Optional
+import sounddevice as sd
 
 import easyocr
 import numpy as np
 import pyaudio
 import soundfile as sf
 import whisper
+from openwakeword.model import Model
 
 import torch
 
@@ -24,49 +26,47 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 try:
     from llm_reasoner import ask_llm
-except Exception:
+    print("[LLM] Connected to llm_reasoner.py")
+except Exception as e:
+    print("[LLM ERROR] Could not import llm_reasoner.py:", e)
+
     def ask_llm(command: str, detections: list[dict]) -> str:
-        if not detections:
-            return "I do not detect any major object right now."
-        top = detections[0]
-        return (
-            "Advanced reasoning is unavailable right now. "
-            f"The nearest visible object is a {top['class']} on the {top['position']}."
-        )
+        return "LLM is not connected right now."
 
 
 # =========================
 # CONFIG
 # =========================
 MODEL_PATH = "yolov8n.pt"
-CAMERA_INDEX = int(os.getenv("VISION_CAMERA_INDEX", "0"))
+CAMERA_INDEX = int(os.getenv("VISION_CAMERA_INDEX", "1"))
 CONF_THRESHOLD = 0.30
 IMG_SIZE = 320
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 360
 WINDOW_NAME = "Proactive Live Vision Assistant"
-
-MIC_INDEX = int(os.getenv("VISION_MIC_INDEX", "-1"))  # -1 = auto detect default input
+MIC_INDEX = 1
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
 FRAME_SIZE = 1280
+SD_WAKE_DEVICE_INDEX = 1
+DEVICE_INDEX = 1
 
 CHUNK_DURATION = 0.1
-SILENCE_THRESHOLD = 200
-SILENCE_DURATION = 0.5
-START_SPEECH_THRESHOLD = 300
-MIN_COMMAND_SECONDS = 0.2
+SILENCE_THRESHOLD = 1800
+SILENCE_DURATION = 0.8
+START_SPEECH_THRESHOLD = 2500
+MIN_COMMAND_SECONDS = 0.5
+WAKEWORD_THRESHOLD = 0.5
+WAKEWORD_COOLDOWN = 5.0
+MAX_COMMAND_SECONDS = 6.0
 
-WAKE_WORDS = [
-    "kevin",
-    "hey kevin",
-    "hello kevin",
-]
+WAKE_RESTART_DELAY = 5.0
+wake_block_until = 0.0
 
 MIN_AREA_RATIO = 0.03
 MIN_PERSON_AREA_RATIO = 0.10
-
+voice_interaction_active = False
 ALLOWED_CLASSES = {
     "person",
     "chair",
@@ -97,6 +97,8 @@ TEXT_DETECTED_COOLDOWN = 10.0
 VISION_ANNOUNCE_INTERVAL = 2.0
 TEXT_AUTO_READ_MAX_CHARS = 120
 ENABLE_AUTO_TEXT_READ = False
+SD_WAKE_DEVICE_INDEX = 1
+SD_SAMPLE_RATE = 16000
 
 
 # =========================
@@ -118,6 +120,9 @@ last_global_announce_time = 0.0
 last_spoken_times = {}
 last_path_clear_time = 0.0
 last_text_detect_time = 0.0
+last_user_interaction_time = 0.0
+last_wakeword_time = 0.0
+USER_INTERACTION_COOLDOWN = 5.0
 
 
 # =========================
@@ -125,30 +130,96 @@ last_text_detect_time = 0.0
 # =========================
 def get_input_device_index(pa: pyaudio.PyAudio) -> Optional[int]:
     if MIC_INDEX >= 0:
+        print(f"[MIC] Using hardcoded microphone index: {MIC_INDEX}")
         return MIC_INDEX
+
+    blocked_keywords = [
+    "voicemod",
+    "steelseries",
+    "sonar",
+    "steam",
+    "intelligo",
+    "virtual",
+    "vad",
+    "speaker",
+    "output",
+    "microphone (realtek hd audio mic input)",
+]
 
     try:
         default_info = pa.get_default_input_device_info()
-        return int(default_info["index"])
-    except Exception:
-        pass
+        name = default_info["name"].lower()
+
+        if not any(word in name for word in blocked_keywords):
+            print(
+                f"[MIC] Using Windows default microphone: "
+                f"{default_info['index']} | {default_info['name']}"
+            )
+            return int(default_info["index"])
+
+        print(f"[MIC] Default mic is virtual/skipped: {default_info['name']}")
+
+    except Exception as e:
+        print("[MIC] No Windows default mic. Using fallback scan.")
+
+    print("\n=== INPUT DEVICES ===")
+
+    fallback_devices = []
 
     for i in range(pa.get_device_count()):
         try:
             info = pa.get_device_info_by_index(i)
-            if int(info.get("maxInputChannels", 0)) > 0:
-                return i
+            name = info["name"].lower()
+            max_channels = int(info.get("maxInputChannels", 0))
+
+            if max_channels <= 0:
+                continue
+
+            print(
+                f"INDEX {i} | {info['name']} | "
+                f"INPUTS={max_channels} | "
+                f"RATE={int(info['defaultSampleRate'])}"
+            )
+
+            if any(word in name for word in blocked_keywords):
+                print(f"[MIC] Skipping virtual/bad device: {i}")
+                continue
+
+            fallback_devices.append(i)
+
         except Exception:
             continue
 
+    print("=====================\n")
+
+    for i in fallback_devices:
+        try:
+            info = pa.get_device_info_by_index(i)
+
+            pa.is_format_supported(
+                rate=int(info["defaultSampleRate"]),
+                input_device=i,
+                input_channels=1,
+                input_format=FORMAT,
+            )
+
+            print(f"[MIC] Selected fallback physical mic: {i} | {info['name']}")
+            return i
+
+        except Exception as e:
+            print(f"[MIC] Skipping unsupported physical mic {i}: {e}")
+
+    print("[MIC ERROR] No usable physical microphone found.")
     return None
-
-
 # =========================
 # MODELS
 # =========================
-whisper_model = whisper.load_model("base").to(device)
+wakeword_model = Model(
+    wakeword_models=["hey_jarvis"],
+    inference_framework="onnx"
+)
 
+whisper_model = whisper.load_model("tiny").to(device)
 try:
     ocr_reader = easyocr.Reader(["en"], gpu=True)
 except Exception:
@@ -182,28 +253,8 @@ def normalize_text(text: str) -> str:
     return text
 
 
-def contains_wake_word(text: str) -> bool:
-    normalized = normalize_text(text)
-
-    for wake_word in sorted(WAKE_WORDS, key=len, reverse=True):
-        pattern = r"\b" + re.escape(wake_word) + r"\b"
-        if re.search(pattern, normalized):
-            return True
-
-    return False
 
 
-def remove_wake_word(text: str) -> str:
-    cleaned = normalize_text(text)
-
-    for wake_word in sorted(WAKE_WORDS, key=len, reverse=True):
-        pattern = r"\b" + re.escape(wake_word) + r"\b"
-        if re.search(pattern, cleaned):
-            cleaned = re.sub(pattern, "", cleaned, count=1).strip()
-            break
-
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
 
 
 def is_repeat_command(command: str) -> bool:
@@ -286,37 +337,44 @@ def speech_worker():
 # =========================
 # AUDIO INPUT
 # =========================
-def listen_for_speech_gate(pa: pyaudio.PyAudio, device_index: Optional[int]) -> bool:
-    if device_index is None:
-        print("[ERROR] No microphone input device found.")
-        time.sleep(1.0)
-        return False
+def listen_for_wake_word(pa: pyaudio.PyAudio, device_index: Optional[int]) -> bool:
+    global last_wakeword_time
+    global wake_block_until
+
+    print("[WAKE] Listening for Hey Jarvis using sounddevice...")
 
     try:
-        stream = pa.open(
-            rate=SAMPLE_RATE,
-            channels=CHANNELS,
-            format=FORMAT,
-            input=True,
-            input_device_index=device_index,
-            frames_per_buffer=FRAME_SIZE
-        )
+        with sd.InputStream(
+            samplerate=16000,
+            channels=1,
+            dtype="int16",
+            blocksize=FRAME_SIZE,
+            device=SD_WAKE_DEVICE_INDEX
+        ) as stream:
+
+            while running:
+                audio, _ = stream.read(FRAME_SIZE)
+                pcm = np.squeeze(audio)
+
+                now = time.time()
+
+                if now < wake_block_until:
+                    continue
+
+                prediction = wakeword_model.predict(pcm)
+                score = prediction.get("hey_jarvis", 0)
+
+                print(f"[WAKE SCORE] {score:.2f}")
+
+                if score > WAKEWORD_THRESHOLD and now - last_wakeword_time > WAKEWORD_COOLDOWN:
+                    print(f"[WAKE] Hey Jarvis detected ({score:.2f})")
+                    last_wakeword_time = now
+                    return True
+
     except Exception as e:
-        print(f"[ERROR] Failed to open microphone: {e}")
+        print(f"[WAKE ERROR] sounddevice failed: {e}")
         time.sleep(1.0)
         return False
-
-    try:
-        while running:
-            data = stream.read(FRAME_SIZE, exception_on_overflow=False)
-            pcm = np.frombuffer(data, dtype=np.int16)
-            volume = np.abs(pcm).mean()
-
-            if volume > START_SPEECH_THRESHOLD:
-                return True
-    finally:
-        stream.stop_stream()
-        stream.close()
 
     return False
 
@@ -329,49 +387,68 @@ def record_until_silence(
     silence_threshold: int = SILENCE_THRESHOLD,
     silence_duration: float = SILENCE_DURATION,
 ) -> io.BytesIO:
-    if device_index is None:
-        raise RuntimeError("No microphone input device found.")
 
+    sample_rate = SD_SAMPLE_RATE
     chunk_size = int(sample_rate * chunk_duration)
-
-    stream = pa.open(
-        rate=sample_rate,
-        channels=CHANNELS,
-        format=FORMAT,
-        input=True,
-        input_device_index=device_index,
-        frames_per_buffer=chunk_size
-    )
+    silence_chunks_needed = max(1, int(silence_duration / chunk_duration))
 
     frames = []
     silent_chunks = 0
     speech_detected = False
-    silence_chunks_needed = max(1, int(silence_duration / chunk_duration))
 
-    try:
+    print("[REC] Listening for command...")
+
+    with sd.InputStream(
+        samplerate=sample_rate,
+        channels=1,
+        dtype="int16",
+        blocksize=chunk_size,
+        device=SD_WAKE_DEVICE_INDEX
+    ) as stream:
+
+        wait_start_time = time.time()
+        start_time = None
+
         while running:
-            data = stream.read(chunk_size, exception_on_overflow=False)
-            frames.append(data)
+            audio, _ = stream.read(chunk_size)
+            pcm = np.squeeze(audio).astype(np.int16)
 
-            audio_np = np.frombuffer(data, dtype=np.int16)
-            volume = np.abs(audio_np).mean()
+            volume = np.abs(pcm).mean()
+            print(f"[VOL] {volume}")
 
-            if volume > silence_threshold:
-                speech_detected = True
-                silent_chunks = 0
+            if not speech_detected:
+                if volume > START_SPEECH_THRESHOLD:
+                    speech_detected = True
+                    silent_chunks = 0
+                    start_time = time.time()
+                    frames.append(pcm.tobytes())
+
+                if time.time() - wait_start_time > 5.0:
+                    print("[REC] No speech detected.")
+                    return io.BytesIO()
+
             else:
-                if speech_detected:
+                frames.append(pcm.tobytes())
+
+                if volume > silence_threshold:
+                    silent_chunks = 0
+                else:
                     silent_chunks += 1
 
-            if speech_detected and silent_chunks >= silence_chunks_needed:
-                break
-    finally:
-        stream.stop_stream()
-        stream.close()
+                if silent_chunks >= silence_chunks_needed:
+                    break
+
+                if start_time and time.time() - start_time > MAX_COMMAND_SECONDS:
+                    print("[REC] Max command time reached.")
+                    break
+
+    if not speech_detected or not frames:
+        return io.BytesIO()
 
     wav_buffer = io.BytesIO()
+
     with wave.open(wav_buffer, "wb") as wf:
-        wf.setnchannels(CHANNELS)
+        wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(sample_rate)
         wf.writeframes(b"".join(frames))
@@ -404,6 +481,13 @@ def transcribe_audio(wav_buffer: io.BytesIO) -> str:
     result = whisper.decode(whisper_model, mel, options)
     return result.text.strip()
 
+def clear_speech_queue():
+    while not speech_queue.empty():
+        try:
+            speech_queue.get_nowait()
+            speech_queue.task_done()
+        except queue.Empty:
+            break
 
 # =========================
 # VISION HELPERS
@@ -573,6 +657,15 @@ def maybe_announce_text(frame, now: float):
 
 
 def auto_announce(detections: list[dict], frame):
+    global last_user_interaction_time
+    global voice_interaction_active
+
+    if voice_interaction_active:
+        return
+
+    if time.time() - last_user_interaction_time < USER_INTERACTION_COOLDOWN:
+        return
+
     now = time.time()
     events = evaluate_scene_events(detections)
 
@@ -607,105 +700,17 @@ def handle_vision_query(command: str, detections: list[dict], frame):
             return last_response_text
         return "There is nothing recent to repeat."
 
-    if (
-        "read" in command
-        or "text" in command
-        or "sign" in command
-        or "menu" in command
-        or "room number" in command
-        or "what does this say" in command
-    ):
-        extracted_text = extract_text_from_frame(frame)
-        if extracted_text:
-            answer = f"The text says: {extracted_text}"
-            remember_response(answer)
-            return answer
-        answer = "I cannot read any clear text right now."
-        remember_response(answer)
-        return answer
+    llm_input = []
 
-    if (
-        "what is in front of me" in command
-        or "what s in front of me" in command
-        or "what is ahead of me" in command
-        or "what is right in front of me" in command
-    ):
-        center_objects = [d for d in detections if d["position"] == "center"]
-
-        if center_objects:
-            main = center_objects[0]
-            answer = (
-                f"There is a {main['class_name']} in front of you. "
-                f"It is {main['distance']}."
-            )
-            remember_response(answer)
-            return answer
-
-        if detections:
-            main = detections[0]
-            answer = (
-                f"The nearest visible object is a {main['class_name']} "
-                f"on the {main['position']}."
-            )
-            remember_response(answer)
-            return answer
-
-        answer = "I do not detect any major object in front of you."
-        remember_response(answer)
-        return answer
-
-    if "what do you see" in command or "describe scene" in command:
-        if not detections:
-            answer = "I do not detect any major object."
-            remember_response(answer)
-            return answer
-
-        unique_names = []
-        seen = set()
-
-        for detection in detections:
-            class_name = detection["class_name"]
-            if class_name not in seen:
-                seen.add(class_name)
-                unique_names.append(class_name)
-
-        if len(unique_names) == 1:
-            answer = f"I see a {unique_names[0]}."
-        elif len(unique_names) == 2:
-            answer = f"I see a {unique_names[0]} and a {unique_names[1]}."
-        else:
-            answer = (
-                "I see "
-                + ", ".join(f"a {name}" for name in unique_names[:-1])
-                + f", and a {unique_names[-1]}."
-            )
-
-        remember_response(answer)
-        return answer
-
-    if "is the path clear" in command or "can i move forward" in command:
-        blockers = [d for d in detections if d["position"] == "center"]
-
-        if blockers:
-            main = blockers[0]
-            answer = f"The path ahead is blocked by a {main['class_name']}."
-            remember_response(answer)
-            return answer
-
-        answer = "The path ahead appears clear."
-        remember_response(answer)
-        return answer
+    for detection in detections:
+        llm_input.append({
+            "class": detection["class_name"],
+            "position": detection["position"],
+            "distance": detection["distance"],
+            "confidence": round(detection["confidence"], 2),
+        })
 
     try:
-        llm_input = []
-        for detection in detections:
-            llm_input.append({
-                "class": detection["class_name"],
-                "position": detection["position"],
-                "distance": detection["distance"],
-                "confidence": round(detection["confidence"], 2),
-            })
-
         answer = ask_llm(command, llm_input)
         remember_response(answer)
         return answer
@@ -845,7 +850,7 @@ def vision_loop():
 
         cv2.putText(
             annotated,
-            "Auto guidance ON | Say: Kevin ... | Press Q or ESC to exit.",
+            "Auto guidance ON | Say: Hey Jarvis ... | Press Q or ESC to exit.",
             (10, 90),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -869,77 +874,197 @@ def vision_loop():
 # =========================
 def voice_loop():
     global running
+    global last_user_interaction_time
+    global voice_interaction_active
+    global wake_block_until
 
     pa = pyaudio.PyAudio()
     device_index = get_input_device_index(pa)
+
     print(f"[INFO] Using microphone device index: {device_index}")
+
+    if device_index is None:
+        print("[VOICE ERROR] No valid microphone found.")
+        return
 
     try:
         while running:
-            heard = listen_for_speech_gate(pa, device_index)
+            heard = listen_for_wake_word(pa, device_index)
+
             if not heard or not running:
                 continue
 
+            print("[VOICE] Wake word accepted.")
+
+            voice_interaction_active = True
+            last_user_interaction_time = time.time()
+
+            clear_speech_queue()
+
             try:
-                raw_audio = record_until_silence(pa, device_index, SAMPLE_RATE)
+                wakeword_model.reset()
+            except Exception:
+                pass
+
+            with speech_lock:
+                speak_windows_tts("Yes?")
+
+            time.sleep(1.0)
+
+            try:
+                raw_audio = record_until_silence(
+                    pa,
+                    device_index,
+                    SAMPLE_RATE
+                )
             except Exception as e:
-                print(f"[ERROR] Audio capture failed: {e}")
-                time.sleep(0.2)
+                print(f"[VOICE ERROR] Audio capture failed: {e}")
+
+                voice_interaction_active = False
+                wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+                try:
+                    wakeword_model.reset()
+                except Exception:
+                    pass
+
+                time.sleep(WAKE_RESTART_DELAY)
                 continue
 
-            raw_audio.seek(0)
             try:
-                audio_array, sr = sf.read(raw_audio, dtype="int16")
-                if len(audio_array.shape) > 1:
-                    audio_array = np.mean(audio_array, axis=1)
-                approx_seconds = len(audio_array) / float(sr)
-            except Exception:
-                approx_seconds = 0.0
-            finally:
                 raw_audio.seek(0)
 
-            if approx_seconds < MIN_COMMAND_SECONDS:
-                time.sleep(0.2)
+                if raw_audio.getbuffer().nbytes == 0:
+                    print("[VOICE] Empty audio buffer.")
+
+                    voice_interaction_active = False
+                    wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+                    try:
+                        wakeword_model.reset()
+                    except Exception:
+                        pass
+
+                    time.sleep(WAKE_RESTART_DELAY)
+                    continue
+
+            except Exception as e:
+                print(f"[VOICE ERROR] Invalid audio buffer: {e}")
+
+                voice_interaction_active = False
+                wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+                try:
+                    wakeword_model.reset()
+                except Exception:
+                    pass
+
+                time.sleep(WAKE_RESTART_DELAY)
                 continue
 
             try:
                 transcript = transcribe_audio(raw_audio)
+                print(f"[TRANSCRIPT RAW] '{transcript}'")
+
             except Exception as e:
-                print(f"Transcription error: {e}")
-                time.sleep(0.2)
+                print(f"[VOICE ERROR] Transcription failed: {e}")
+
+                voice_interaction_active = False
+                wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+                try:
+                    wakeword_model.reset()
+                except Exception:
+                    pass
+
+                time.sleep(WAKE_RESTART_DELAY)
                 continue
 
-            if not transcript:
+            if not transcript or not transcript.strip():
+                print("[VOICE] No valid speech detected.")
+
+                voice_interaction_active = False
+                wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+                try:
+                    wakeword_model.reset()
+                except Exception:
+                    pass
+
+                time.sleep(WAKE_RESTART_DELAY)
                 continue
 
             normalized_transcript = normalize_text(transcript)
+
             print(f"[HEARD] {normalized_transcript}")
 
-            if not contains_wake_word(normalized_transcript):
-                print("[IGNORED] Wake word not found.")
-                continue
-
-            command = remove_wake_word(normalized_transcript)
-
-            if not command:
-                enqueue_speech("Ready.")
-                continue
+            last_user_interaction_time = time.time()
 
             with frame_lock:
                 detections_copy = list(latest_detections)
                 frame_copy = None if latest_frame is None else latest_frame.copy()
 
-            answer = handle_vision_query(command, detections_copy, frame_copy)
+            try:
+                answer = handle_vision_query(
+                    normalized_transcript,
+                    detections_copy,
+                    frame_copy
+                )
+
+            except Exception as e:
+                print(f"[VOICE ERROR] Query handling failed: {e}")
+                answer = "I could not process that request."
+
+            print(f"[ASSISTANT] {answer}")
 
             if answer == "__EXIT__":
-                enqueue_speech("Stopping live vision assistant.")
+                with speech_lock:
+                    speak_windows_tts("Stopping live vision assistant.")
+
                 running = False
                 break
 
-            enqueue_speech(answer)
+            clear_speech_queue()
+
+            try:
+                with speech_lock:
+                    speak_windows_tts(answer)
+
+            except Exception as e:
+                print(f"[VOICE ERROR] TTS failed: {e}")
+
+            last_user_interaction_time = time.time()
+            voice_interaction_active = False
+
+            wake_block_until = time.time() + WAKE_RESTART_DELAY
+
+            try:
+                wakeword_model.reset()
+            except Exception:
+                pass
+
+            print("[VOICE] Cooling down before wake word restart...")
+            time.sleep(WAKE_RESTART_DELAY)
+
+            try:
+                wakeword_model.reset()
+            except Exception:
+                pass
 
     finally:
-        pa.terminate()
+        voice_interaction_active = False
+
+        try:
+            wakeword_model.reset()
+        except Exception:
+            pass
+
+        try:
+            pa.terminate()
+        except Exception:
+            pass
+
+        print("[VOICE] Voice loop terminated.")
 
 
 # =========================
@@ -948,7 +1073,7 @@ def voice_loop():
 def main():
     global running
 
-    enqueue_speech("Proactive live vision assistant started. Automatic guidance is active. Say Kevin before optional voice commands.")
+    enqueue_speech("Proactive live vision assistant started. Automatic guidance is active. Say Hey Jarvis before optional voice commands.")
 
     speaker_thread = threading.Thread(target=speech_worker, daemon=True)
     vision_thread = threading.Thread(target=vision_loop, daemon=True)
