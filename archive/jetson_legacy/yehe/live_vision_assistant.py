@@ -2,7 +2,6 @@ from ultralytics import YOLO
 import cv2
 import time
 import threading
-import subprocess
 import io
 import wave
 import signal
@@ -12,6 +11,10 @@ import os
 import queue
 from typing import Optional
 import sounddevice as sd
+import asyncio
+import tempfile
+import edge_tts
+import pygame
 
 import easyocr
 import numpy as np
@@ -19,10 +22,15 @@ import pyaudio
 import soundfile as sf
 import whisper
 from openwakeword.model import Model
-
 import torch
 
+import pyzed.sl as sl
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
+pygame.mixer.init()
+pygame.mixer.music.set_volume(1.0)
+tts_playing = False
+TTS_VOICE = "en-US-GuyNeural"
 
 try:
     from llm_reasoner import ask_llm
@@ -39,7 +47,7 @@ except Exception as e:
 # =========================
 MODEL_PATH = "yolov8n.pt"
 CAMERA_INDEX = int(os.getenv("VISION_CAMERA_INDEX", "1"))
-CONF_THRESHOLD = 0.30
+CONF_THRESHOLD = 0.20
 IMG_SIZE = 320
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 360
@@ -48,20 +56,21 @@ MIC_INDEX = 1
 SAMPLE_RATE = 16000
 CHANNELS = 1
 FORMAT = pyaudio.paInt16
-FRAME_SIZE = 1280
+FRAME_SIZE = 640
 SD_WAKE_DEVICE_INDEX = 1
 DEVICE_INDEX = 1
+
+WAKEWORD_NAME = "jarvis"
 
 CHUNK_DURATION = 0.1
 SILENCE_THRESHOLD = 1800
 SILENCE_DURATION = 0.8
 START_SPEECH_THRESHOLD = 2500
 MIN_COMMAND_SECONDS = 0.5
-WAKEWORD_THRESHOLD = 0.5
-WAKEWORD_COOLDOWN = 5.0
+WAKEWORD_THRESHOLD = 0.35
 MAX_COMMAND_SECONDS = 6.0
-
-WAKE_RESTART_DELAY = 5.0
+WAKEWORD_COOLDOWN = 1.0
+WAKE_RESTART_DELAY = 1.5
 wake_block_until = 0.0
 
 MIN_AREA_RATIO = 0.03
@@ -88,6 +97,9 @@ ALLOWED_CLASSES = {
     "mouse",
     "remote",
 }
+
+USE_ZED_DEPTH = True
+DEPTH_COLLISION_THRESHOLD = 0.8
 
 # Proactive behavior tuning
 GLOBAL_COOLDOWN = 2.5
@@ -122,6 +134,7 @@ last_path_clear_time = 0.0
 last_text_detect_time = 0.0
 last_user_interaction_time = 0.0
 last_wakeword_time = 0.0
+last_manual_speech_time = 0.0
 USER_INTERACTION_COOLDOWN = 5.0
 
 
@@ -214,8 +227,9 @@ def get_input_device_index(pa: pyaudio.PyAudio) -> Optional[int]:
 # =========================
 # MODELS
 # =========================
+
 wakeword_model = Model(
-    wakeword_models=["hey_jarvis"],
+    wakeword_models=[WAKEWORD_NAME],
     inference_framework="onnx"
 )
 
@@ -246,13 +260,29 @@ signal.signal(signal.SIGINT, handle_interrupt)
 # =========================
 # TEXT HELPERS
 # =========================
+def normalize_tts_text(text: str) -> str:
+    replacements = {
+        "it's": "it is",
+        "It's": "It is",
+        "there's": "there is",
+        "There's": "There is",
+        "you're": "you are",
+        "You're": "You are",
+        "don't": "do not",
+        "can't": "cannot",
+        "won't": "will not",
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return text
+
 def normalize_text(text: str) -> str:
     text = text.lower().strip()
     text = re.sub(r"[^\w\s]", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
-
-
 
 
 
@@ -278,44 +308,65 @@ def remember_response(text: str):
 # =========================
 # SPEECH OUTPUT
 # =========================
-def speak_windows_tts(text: str):
-    global last_spoken_text, last_spoken_time
+async def async_edge_tts(text: str):
+    global tts_playing
 
-    text = str(text).strip()
+    tts_playing = True
+
+    communicate = edge_tts.Communicate(
+        text=text,
+        voice=TTS_VOICE,
+        rate="+0%"
+    )
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
+        temp_path = f.name
+
+    try:
+        await communicate.save(temp_path)
+
+        pygame.mixer.music.load(temp_path)
+        pygame.mixer.music.play()
+
+        while pygame.mixer.music.get_busy():
+            await asyncio.sleep(0.05)
+
+    finally:
+        tts_playing = False
+
+        try:
+            pygame.mixer.music.unload()
+        except:
+            pass
+
+        try:
+            os.remove(temp_path)
+        except:
+            pass
+
+
+def speak(text: str):
+    text = normalize_tts_text(str(text).strip())
+
     if not text:
         return
 
-    now = time.time()
-    if text == last_spoken_text and (now - last_spoken_time) < 1.0:
-        return
-
-    last_spoken_text = text
-    last_spoken_time = now
-
-    safe_text = text.replace("'", "''")
-
-    ps_command = (
-        "Add-Type -AssemblyName System.Speech;"
-        "$speaker = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
-        "$speaker.Rate = 0;"
-        f"$speaker.Speak('{safe_text}');"
-    )
-
     try:
-        subprocess.run(
-            ["powershell", "-Command", ps_command],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
-    except FileNotFoundError:
-        print(f"[TTS] {text}")
+        asyncio.run(async_edge_tts(text))
+
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(async_edge_tts(text))
+        loop.close()
 
 
 def enqueue_speech(text: str):
     text = str(text).strip()
+
     if not text:
         return
+
     speech_queue.put(text)
 
 
@@ -325,23 +376,34 @@ def speech_worker():
     while running:
         try:
             text = speech_queue.get(timeout=0.2)
+
         except queue.Empty:
             continue
 
-        with speech_lock:
-            speak_windows_tts(text)
+        try:
+            with speech_lock:
+                speak(text)
+
+        except Exception as e:
+            print(f"[TTS ERROR] {e}")
 
         speech_queue.task_done()
-
-
+        
 # =========================
 # AUDIO INPUT
 # =========================
-def listen_for_wake_word(pa: pyaudio.PyAudio, device_index: Optional[int]) -> bool:
+def listen_for_wake_word(
+    pa: pyaudio.PyAudio,
+    device_index: Optional[int]
+) -> bool:
+
     global last_wakeword_time
     global wake_block_until
+    global tts_playing
 
-    print("[WAKE] Listening for Hey Jarvis using sounddevice...")
+    wakeword_model.reset()
+
+    print("[WAKE] Listening for Jarvis...")
 
     try:
         with sd.InputStream(
@@ -353,28 +415,60 @@ def listen_for_wake_word(pa: pyaudio.PyAudio, device_index: Optional[int]) -> bo
         ) as stream:
 
             while running:
-                audio, _ = stream.read(FRAME_SIZE)
+
+                if tts_playing:
+                    time.sleep(0.05)
+                    continue
+
+                audio, overflowed = stream.read(FRAME_SIZE)
+
                 pcm = np.squeeze(audio)
+
+                pcm = pcm.astype(np.int16)
+
+                if pcm.ndim > 1:
+                    pcm = pcm[:, 0]
+
+                pcm = pcm.flatten()
+                
+                print(
+    f"[WAKE AUDIO] shape={pcm.shape} "
+    f"dtype={pcm.dtype} "
+    f"max={np.max(np.abs(pcm))}"
+)
 
                 now = time.time()
 
                 if now < wake_block_until:
                     continue
 
+                pcm = pcm.astype(np.float32)
+
+                pcm *= 12.0
+
+                pcm = np.clip(pcm, -32768, 32767)
+
+                pcm = pcm.astype(np.int16)
+
                 prediction = wakeword_model.predict(pcm)
-                score = prediction.get("hey_jarvis", 0)
+                score = prediction.get(WAKEWORD_NAME, 0)
 
                 print(f"[WAKE SCORE] {score:.2f}")
 
-                if score > WAKEWORD_THRESHOLD and now - last_wakeword_time > WAKEWORD_COOLDOWN:
+                if (
+                    score > WAKEWORD_THRESHOLD
+                    and now - last_wakeword_time > WAKEWORD_COOLDOWN
+                ):
                     print(f"[WAKE] Hey Jarvis detected ({score:.2f})")
+
                     last_wakeword_time = now
+                    global last_manual_speech_time
+                    last_manual_speech_time = time.time()
                     return True
 
     except Exception as e:
-        print(f"[WAKE ERROR] sounddevice failed: {e}")
+        print(f"[WAKE ERROR] {e}")
         time.sleep(1.0)
-        return False
 
     return False
 
@@ -389,8 +483,13 @@ def record_until_silence(
 ) -> io.BytesIO:
 
     sample_rate = SD_SAMPLE_RATE
+
     chunk_size = int(sample_rate * chunk_duration)
-    silence_chunks_needed = max(1, int(silence_duration / chunk_duration))
+
+    silence_chunks_needed = max(
+        1,
+        int(silence_duration / chunk_duration)
+    )
 
     frames = []
     silent_chunks = 0
@@ -410,17 +509,22 @@ def record_until_silence(
         start_time = None
 
         while running:
+
             audio, _ = stream.read(chunk_size)
+
             pcm = np.squeeze(audio).astype(np.int16)
 
             volume = np.abs(pcm).mean()
+
             print(f"[VOL] {volume}")
 
             if not speech_detected:
+
                 if volume > START_SPEECH_THRESHOLD:
                     speech_detected = True
                     silent_chunks = 0
                     start_time = time.time()
+
                     frames.append(pcm.tobytes())
 
                 if time.time() - wait_start_time > 5.0:
@@ -438,7 +542,10 @@ def record_until_silence(
                 if silent_chunks >= silence_chunks_needed:
                     break
 
-                if start_time and time.time() - start_time > MAX_COMMAND_SECONDS:
+                if (
+                    start_time
+                    and time.time() - start_time > MAX_COMMAND_SECONDS
+                ):
                     print("[REC] Max command time reached.")
                     break
 
@@ -454,17 +561,23 @@ def record_until_silence(
         wf.writeframes(b"".join(frames))
 
     wav_buffer.seek(0)
+
     return wav_buffer
 
 
 def transcribe_audio(wav_buffer: io.BytesIO) -> str:
-    audio_array, sample_rate = sf.read(wav_buffer, dtype="float32")
+
+    audio_array, sample_rate = sf.read(
+        wav_buffer,
+        dtype="float32"
+    )
 
     if len(audio_array.shape) > 1:
         audio_array = np.mean(audio_array, axis=1)
 
     if sample_rate != SAMPLE_RATE:
         import librosa
+
         audio_array = librosa.resample(
             audio_array,
             orig_sr=sample_rate,
@@ -475,20 +588,35 @@ def transcribe_audio(wav_buffer: io.BytesIO) -> str:
         return ""
 
     audio_array = whisper.pad_or_trim(audio_array)
-    mel = whisper.log_mel_spectrogram(audio_array).to(whisper_model.device)
 
-    options = whisper.DecodingOptions(language="en", fp16=False)
-    result = whisper.decode(whisper_model, mel, options)
+    mel = whisper.log_mel_spectrogram(
+        audio_array
+    ).to(whisper_model.device)
+
+    options = whisper.DecodingOptions(
+        language="en",
+        fp16=False
+    )
+
+    result = whisper.decode(
+        whisper_model,
+        mel,
+        options
+    )
+
     return result.text.strip()
 
+
 def clear_speech_queue():
+
     while not speech_queue.empty():
+
         try:
             speech_queue.get_nowait()
             speech_queue.task_done()
+
         except queue.Empty:
             break
-
 # =========================
 # VISION HELPERS
 # =========================
@@ -580,7 +708,18 @@ def evaluate_scene_events(detections: list[dict]) -> list[dict]:
         class_name = d["class_name"]
         position = d["position"]
         distance = d["distance"]
+        depth_meters = d.get("depth_meters")
 
+        if (
+            position == "center"
+            and depth_meters is not None
+            and depth_meters < DEPTH_COLLISION_THRESHOLD
+        ):
+            events.append({
+                "priority": 200,
+                "message": "Immediate obstacle ahead."
+            })
+            continue
         if position == "center" and distance == "very close":
             events.append({
                 "priority": 100,
@@ -659,7 +798,10 @@ def maybe_announce_text(frame, now: float):
 def auto_announce(detections: list[dict], frame):
     global last_user_interaction_time
     global voice_interaction_active
-
+    global last_manual_speech_time
+    
+    if time.time() - last_manual_speech_time < 3.0:
+        return
     if voice_interaction_active:
         return
 
@@ -722,40 +864,110 @@ def handle_vision_query(command: str, detections: list[dict], frame):
         return answer
 
 
+def get_zed_depth_distance(depth_map, x1, y1, x2, y2):
+
+    center_x = int((x1 + x2) / 2)
+    center_y = int((y1 + y2) / 2)
+
+    err, depth_value = depth_map.get_value(center_x, center_y)
+
+    if err != sl.ERROR_CODE.SUCCESS:
+        return None
+
+    if np.isnan(depth_value) or np.isinf(depth_value):
+        return None
+
+    if depth_value <= 0:
+        return None
+
+    if depth_value > 10:
+        return None
+
+    return float(depth_value)
 # =========================
 # VISION LOOP
 # =========================
 def vision_loop():
     global latest_detections, latest_frame, running
+    
+    zed = None
+    runtime = None
+    image = None
+    depth = None
 
+    if USE_ZED_DEPTH:
+
+        zed = sl.Camera()
+
+        init_params = sl.InitParameters()
+        init_params.depth_mode = sl.DEPTH_MODE.PERFORMANCE
+        init_params.coordinate_units = sl.UNIT.METER
+        init_params.camera_resolution = sl.RESOLUTION.HD720
+
+        status = zed.open(init_params)
+
+        if status != sl.ERROR_CODE.SUCCESS:
+            print("[ZED ERROR] Failed to open ZED camera")
+            running = False
+            return
+
+        runtime = sl.RuntimeParameters()
+
+        image = sl.Mat()
+        depth = sl.Mat()
+
+        print("[ZED] Depth camera initialized.")
+    
     model = YOLO(MODEL_PATH)
     model.to(device)
+    if USE_ZED_DEPTH:
 
-    cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(CAMERA_INDEX)
+        actual_width = 1280
+        actual_height = 720
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    else:
 
-    if not cap.isOpened():
-        print("[ERROR] Failed to open camera")
-        running = False
-        return
+        cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
 
-    actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or FRAME_WIDTH
-    actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or FRAME_HEIGHT
+        if not cap.isOpened():
+            cap = cv2.VideoCapture(CAMERA_INDEX)
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+
+        if not cap.isOpened():
+            print("[ERROR] Failed to open camera")
+            running = False
+            return
+
+        actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or FRAME_WIDTH
+        actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or FRAME_HEIGHT
+
     frame_area = max(actual_width * actual_height, 1)
 
     prev_time = time.time()
     last_auto_announce_time = 0.0
 
     while running:
-        ret, frame = cap.read()
-        if not ret:
-            print("[ERROR] Failed to read frame")
-            running = False
-            break
+        if USE_ZED_DEPTH:
+
+            if zed.grab(runtime) != sl.ERROR_CODE.SUCCESS:
+                continue
+
+            zed.retrieve_image(image, sl.VIEW.LEFT)
+            zed.retrieve_measure(depth, sl.MEASURE.DEPTH)
+
+            frame = image.get_data()
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+        else:
+
+            ret, frame = cap.read()
+
+            if not ret:
+                print("[ERROR] Failed to read frame")
+                running = False
+                break
 
         results = model(
             frame,
@@ -791,7 +1003,31 @@ def vision_loop():
 
                 center_x = (x1 + x2) / 2.0
                 position = get_position_label(center_x, actual_width)
-                distance = get_distance_label(area_ratio)
+                depth_distance = None
+
+                if USE_ZED_DEPTH:
+                    depth_distance = get_zed_depth_distance(
+                        depth,
+                        x1,
+                        y1,
+                        x2,
+                        y2
+                    )
+
+                if depth_distance is not None:
+
+                    if depth_distance < 0.8:
+                        distance = "very close"
+                    elif depth_distance < 1.5:
+                        distance = "close"
+                    elif depth_distance < 3.0:
+                        distance = "medium"
+                    else:
+                        distance = "far"
+
+                else:
+                    distance = get_distance_label(area_ratio)
+                    
 
                 detections.append({
                     "class_name": class_name,
@@ -800,12 +1036,18 @@ def vision_loop():
                     "distance": distance,
                     "area_ratio": area_ratio,
                     "box": (x1, y1, x2, y2),
+                    "depth_meters": depth_distance,
                 })
 
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                label = f"{class_name} | {position} | {distance}"
+
+                if depth_distance is not None:
+                    label += f" | {depth_distance:.2f}m"
+
                 cv2.putText(
                     annotated,
-                    f"{class_name} {conf:.2f} | {position} | {distance}",
+                    label,
                     (x1, max(y1 - 10, 25)),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.55,
@@ -865,7 +1107,18 @@ def vision_loop():
             running = False
             break
 
-    cap.release()
+    if USE_ZED_DEPTH:
+        try:
+            zed.close()
+        except:
+            pass
+
+    else:
+
+        try:
+            cap.release()
+        except:
+            pass
     cv2.destroyAllWindows()
 
 
@@ -877,7 +1130,9 @@ def voice_loop():
     global last_user_interaction_time
     global voice_interaction_active
     global wake_block_until
+    global tts_playing
 
+    wakeword_model.reset()
     pa = pyaudio.PyAudio()
     device_index = get_input_device_index(pa)
 
@@ -907,9 +1162,9 @@ def voice_loop():
                 pass
 
             with speech_lock:
-                speak_windows_tts("Yes?")
+                speak("Yes?")
 
-            time.sleep(1.0)
+            time.sleep(0.3)
 
             try:
                 raw_audio = record_until_silence(
@@ -928,7 +1183,7 @@ def voice_loop():
                 except Exception:
                     pass
 
-                time.sleep(WAKE_RESTART_DELAY)
+                
                 continue
 
             try:
@@ -945,7 +1200,7 @@ def voice_loop():
                     except Exception:
                         pass
 
-                    time.sleep(WAKE_RESTART_DELAY)
+                    
                     continue
 
             except Exception as e:
@@ -959,7 +1214,7 @@ def voice_loop():
                 except Exception:
                     pass
 
-                time.sleep(WAKE_RESTART_DELAY)
+                
                 continue
 
             try:
@@ -977,7 +1232,7 @@ def voice_loop():
                 except Exception:
                     pass
 
-                time.sleep(WAKE_RESTART_DELAY)
+                
                 continue
 
             if not transcript or not transcript.strip():
@@ -991,7 +1246,7 @@ def voice_loop():
                 except Exception:
                     pass
 
-                time.sleep(WAKE_RESTART_DELAY)
+                
                 continue
 
             normalized_transcript = normalize_text(transcript)
@@ -1019,7 +1274,7 @@ def voice_loop():
 
             if answer == "__EXIT__":
                 with speech_lock:
-                    speak_windows_tts("Stopping live vision assistant.")
+                    speak("Stopping live vision assistant.")
 
                 running = False
                 break
@@ -1028,7 +1283,7 @@ def voice_loop():
 
             try:
                 with speech_lock:
-                    speak_windows_tts(answer)
+                    speak(answer)
 
             except Exception as e:
                 print(f"[VOICE ERROR] TTS failed: {e}")
@@ -1043,8 +1298,8 @@ def voice_loop():
             except Exception:
                 pass
 
-            print("[VOICE] Cooling down before wake word restart...")
-            time.sleep(WAKE_RESTART_DELAY)
+            print("[VOICE] Wake word ready.")
+            
 
             try:
                 wakeword_model.reset()
