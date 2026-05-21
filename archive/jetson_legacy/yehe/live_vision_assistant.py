@@ -25,7 +25,7 @@ from openwakeword.model import Model
 import torch
 
 import pyzed.sl as sl
-
+print("ZED SDK detected")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 pygame.mixer.init()
 pygame.mixer.music.set_volume(1.0)
@@ -900,9 +900,9 @@ def vision_loop():
         zed = sl.Camera()
 
         init_params = sl.InitParameters()
-        init_params.depth_mode = sl.DEPTH_MODE.PERFORMANCE
+        init_params.depth_mode = sl.DEPTH_MODE.NONE
         init_params.coordinate_units = sl.UNIT.METER
-        init_params.camera_resolution = sl.RESOLUTION.HD720
+        init_params.camera_resolution = sl.RESOLUTION.VGA
 
         status = zed.open(init_params)
 
