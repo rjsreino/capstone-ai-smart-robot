@@ -1,0 +1,202 @@
+{
+    "Camera Test": {
+        "ZEDCount": 1,
+        "deviceInitResult": 6,
+        "error": [
+            "<b>Specific resolutions are not available</b> <br/> Replug your device or connect the camera to another <b>USB 3.0</b> port."
+        ],
+        "resolutions": {
+            "HD1080@15": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "HD1080@30": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "HD2K@15": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "HD720@15": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "HD720@30": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "HD720@60": {
+                "initCode": false,
+                "initialization": "Not recognized"
+            },
+            "VGA@100": {
+                "fps (input)": 100,
+                "fps (output)": 28,
+                "height (input)": 376,
+                "height (output)": 376,
+                "initCode": true,
+                "initialization": "Ok",
+                "width (input)": 672,
+                "width (output)": 672
+            },
+            "VGA@15": {
+                "fps (input)": 15,
+                "fps (output)": 15,
+                "height (input)": 376,
+                "height (output)": 376,
+                "initCode": true,
+                "initialization": "Ok",
+                "width (input)": 672,
+                "width (output)": 672
+            },
+            "VGA@30": {
+                "fps (input)": 30,
+                "fps (output)": 30,
+                "height (input)": 376,
+                "height (output)": 376,
+                "initCode": true,
+                "initialization": "Ok",
+                "width (input)": 672,
+                "width (output)": 672
+            },
+            "VGA@60": {
+                "fps (input)": 60,
+                "fps (output)": 32,
+                "height (input)": 376,
+                "height (output)": 376,
+                "initCode": true,
+                "initialization": "Ok",
+                "width (input)": 672,
+                "width (output)": 672
+            }
+        },
+        "serial": 19208,
+        "videoNumber": 1
+    },
+    "Graphics Card": {
+        "deviceCount": 1,
+        "deviceDriverVersion": 13020,
+        "devices": [
+            {
+                "arch": "unknown",
+                "computeCapability": "8.6",
+                "cores": 0,
+                "name": "NVIDIA GeForce RTX 3050 Laptop GPU",
+                "totalMemoryBytes": "4294443008",
+                "totalMemoryMB": 4095.5
+            }
+        ],
+        "initResult": 0
+    },
+    "Processor": {
+        "OS": "Windows 10 FallCreators",
+        "avxSupported": true,
+        "coreCount": "8",
+        "cpu": "AMD Ryzen 9 5900HS with Radeon Graphics        ",
+        "datetime": "2026-05-21 19:00:28",
+        "hyperThreading": "1",
+        "motherboard": "GA503QC, ASUSTeK COMPUTER INC.",
+        "ramCapacity": "15.4066",
+        "ramUsage": "0",
+        "ramUsed": "10.1968",
+        "threadCount": "16",
+        "valid": [
+            "<b>Processor: </b> AMD Ryzen 9 5900HS with Radeon Graphics        ",
+            "<b>Motherboard: </b> GA503QC, ASUSTeK COMPUTER INC."
+        ]
+    },
+    "USB": {
+        "ASMediaFound": false,
+        "CorruptedFirmware": false,
+        "OC_Cam_Detected": false,
+        "OtherUSBDevices": [
+        ],
+        "USBList": [
+            {
+                "USBMode": 2,
+                "USB_path": "/1",
+                "bDescriptorType": 1,
+                "bDeviceProtocol": 1,
+                "bLength": 18,
+                "bMaxPacketSize0": 64,
+                "bNumConfigurations": 1,
+                "bcdDevice": "1.0",
+                "bcdUSB": "2.16",
+                "bcdUSBClass": 239,
+                "bcdUSBSubClass": 2,
+                "busNumber": 2,
+                "device": "ZED",
+                "iManufacturer": 1,
+                "iProduct": 2,
+                "iSerial": 0,
+                "idProduct": 62850,
+                "idVendor": 11011
+            },
+            {
+                "USB_path": "/4",
+                "idProduct": 13667,
+                "idVendor": 5075
+            },
+            {
+                "USB_path": "/3",
+                "idProduct": 21021,
+                "idVendor": 10182
+            }
+        ],
+        "USBMode": 2,
+        "ZEDDetected": true,
+        "captureDevices": [
+        ],
+        "controllers": [
+            {
+                "CompatibleIDs": "PCI\\VEN_1022&DEV_1639&REV_00",
+                "Description": "USB xHCI Compliant Host Controller",
+                "DeviceName": "AMD USB 3.10 eXtensible Host Controller - 1.10 (Microsoft)",
+                "Driver": "{36fc9e60-c465-11cf-8056-444553540000}\\0000",
+                "Location": "PCI bus 6, device 0, function 3",
+                "Manufacturer": "Generic USB xHCI Host Controller",
+                "Name": "PCI",
+                "PhysicalName": "\\Device\\NTPNP_PCI0027"
+            },
+            {
+                "CompatibleIDs": "USB\\USB20_HUB",
+                "Description": "Generic USB Hub",
+                "DeviceName": "",
+                "Driver": "{36fc9e60-c465-11cf-8056-444553540000}\\0011",
+                "Location": "Port_#0001.Hub_#0002",
+                "Manufacturer": "(Standard USB HUBs)",
+                "Name": "USB",
+                "PhysicalName": ""
+            },
+            {
+                "CompatibleIDs": "",
+                "Description": "USB Root Hub (USB 3.0)",
+                "DeviceName": "",
+                "Driver": "{36fc9e60-c465-11cf-8056-444553540000}\\0003",
+                "Location": "",
+                "Manufacturer": "(Standard USB HUBs)",
+                "Name": "USB",
+                "PhysicalName": "\\Device\\USBPDO-0"
+            }
+        ],
+        "error": [
+            "<b>USB 2.0 connection detected</b><br/> Please connect your camera to an <b>USB 3.0</b> port."
+        ]
+    },
+    "ZED SDK": {
+        "CUDA Toolkit version": "V9.1.85",
+        "CUDA_reachable": true,
+        "DiagnosticZEDSDKVersion": "2.4.0",
+        "InstalledZEDSDKVersion": "2.4.0",
+        "ZEDSDKFound": true,
+        "driverVersion": "596.49",
+        "drivervDllVersion": "32.0.15.9649",
+        "initResult": 0,
+        "loaded": true,
+        "runtimeDllVersion": "",
+        "valid": [
+            "<b>ZED SDK version:</b> 2.4.0"
+        ]
+    }
+}
