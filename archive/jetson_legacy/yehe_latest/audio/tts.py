@@ -5,6 +5,7 @@ import queue
 
 import edge_tts
 import pygame
+pygame.mixer.init()
 
 import shared.state as state
 
@@ -67,7 +68,7 @@ async def async_edge_tts(text: str):
 def speech_worker():
     global running
 
-    while running:
+    while state.running:
         try:
             text = state.speech_queue.get(timeout=0.2)
 

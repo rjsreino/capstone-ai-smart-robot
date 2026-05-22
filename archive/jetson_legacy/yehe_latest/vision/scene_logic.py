@@ -18,9 +18,8 @@ from utils.text_utils import (
 
 
 def should_announce(message: str, now: float) -> bool:
-    global last_global_announce_time
 
-    if now - last_global_announce_time < GLOBAL_COOLDOWN:
+    if now - state.last_global_announce_time < GLOBAL_COOLDOWN:
         return False
 
     last_time = state.last_spoken_times.get(message, 0.0)
@@ -28,30 +27,28 @@ def should_announce(message: str, now: float) -> bool:
         return False
 
     state.last_spoken_times[message] = now
-    last_global_announce_time = now
+    state.last_global_announce_time = now
     return True
 
 
 def maybe_announce_clear_path(now: float):
-    global last_path_clear_time
 
-    if now - last_path_clear_time < CLEAR_PATH_COOLDOWN:
+    if now - state.last_path_clear_time < CLEAR_PATH_COOLDOWN:
         return
 
     msg = "Path ahead appears clear."
     if should_announce(msg, now):
         remember_response(msg)
         enqueue_speech(msg)
-        last_path_clear_time = now
+        state.last_path_clear_time = now
         
         
 def maybe_announce_text(frame, now: float):
-    global last_text_detect_time
 
     if frame is None:
         return
 
-    if now - last_text_detect_time < TEXT_DETECTED_COOLDOWN:
+    if now - state.last_text_detect_time < TEXT_DETECTED_COOLDOWN:
         return
 
     extracted_text = extract_text_from_frame(frame)
@@ -69,20 +66,17 @@ def maybe_announce_text(frame, now: float):
     if should_announce(msg, now):
         remember_response(msg)
         enqueue_speech(msg)
-        last_text_detect_time = now
+        state.last_text_detect_time = now
 
 
 def auto_announce(detections: list[dict], frame):
-    global last_user_interaction_time
-    global voice_interaction_active
-    global last_manual_speech_time
     
-    if time.time() - last_manual_speech_time < 3.0:
+    if time.time() - state.last_manual_speech_time < 3.0:
         return
-    if voice_interaction_active:
+    if state.voice_interaction_active:
         return
 
-    if time.time() - last_user_interaction_time < USER_INTERACTION_COOLDOWN:
+    if time.time() - state.last_user_interaction_time < USER_INTERACTION_COOLDOWN:
         return
 
     now = time.time()

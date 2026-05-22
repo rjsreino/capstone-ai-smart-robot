@@ -35,7 +35,7 @@ def listen_for_wake_word(
 
             while state.running:
 
-                if tts_playing:
+                if state.tts_playing:
                     time.sleep(0.05)
                     continue
 
@@ -58,7 +58,7 @@ def listen_for_wake_word(
 
                 now = time.time()
 
-                if now < wake_block_until:
+                if now < state.wake_block_until:
                     continue
 
                 pcm = pcm.astype(np.float32)
@@ -76,11 +76,11 @@ def listen_for_wake_word(
 
                 if (
                     score > WAKEWORD_THRESHOLD
-                    and now - last_wakeword_time > WAKEWORD_COOLDOWN
+                    and now - state.last_wakeword_time > WAKEWORD_COOLDOWN
                 ):
                     print(f"[WAKE] Hey Jarvis detected ({score:.2f})")
 
-                    last_wakeword_time = now
+                    state.last_wakeword_time = now
                     global last_manual_speech_time
                     last_manual_speech_time = time.time()
                     return True
