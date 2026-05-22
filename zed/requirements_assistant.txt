@@ -1,0 +1,18 @@
+# Requirements for ZED Live Vision Assistant
+# Note: pyzed, torch, numpy, and opencv-python are already installed in your environment.
+
+# Object Detection & OCR
+ultralytics
+easyocr
+
+# LLM Interface
+ollama
+
+# Audio & Voice Input/Output
+pyaudio
+sounddevice
+soundfile
+openai-whisper
+openwakeword
+edge-tts
+pygame
