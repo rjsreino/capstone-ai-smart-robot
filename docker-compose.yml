@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: vicky_postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: vicky_secure_password123
+      POSTGRES_DB: vicky_telemetry
+    ports:
+      - "5432:5432"
+    volumes:
+      - vicky_postgres_data:/var/lib/postgresql/data
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    container_name: vicky_cloud_server
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:vicky_secure_password123@db:5432/vicky_telemetry
+    depends_on:
+      - db
+
+volumes:
+  vicky_postgres_data:
