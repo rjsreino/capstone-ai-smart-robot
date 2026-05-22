@@ -6,7 +6,10 @@ import numpy as np
 
 from ultralytics import YOLO
 
-import pyzed.sl as sl
+from config.settings import *
+
+if USE_ZED_DEPTH:
+    import pyzed.sl as sl
 
 import shared.state as state
 
@@ -37,8 +40,7 @@ def get_distance_label(area_ratio: float) -> str:
     return "far"
 
 def vision_loop():
-    global latest_detections, latest_frame, running
-    
+    print("[VISION] Vision loop started")
     zed = None
     runtime = None
     image = None
@@ -57,7 +59,7 @@ def vision_loop():
 
         if status != sl.ERROR_CODE.SUCCESS:
             print("[ZED ERROR] Failed to open ZED camera")
-            running = False
+            state.running = False
             return
 
         runtime = sl.RuntimeParameters()
@@ -77,6 +79,9 @@ def vision_loop():
     else:
 
         cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_DSHOW)
+        
+        print("[VISION] Camera index:", CAMERA_INDEX)
+        print("[VISION] Camera opened:", cap.isOpened())
 
         if not cap.isOpened():
             cap = cv2.VideoCapture(CAMERA_INDEX)
@@ -86,7 +91,7 @@ def vision_loop():
 
         if not cap.isOpened():
             print("[ERROR] Failed to open camera")
-            running = False
+            state.running = False
             return
 
         actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or FRAME_WIDTH
@@ -97,7 +102,7 @@ def vision_loop():
     prev_time = time.time()
     last_auto_announce_time = 0.0
 
-    while running:
+    while state.running:
         if USE_ZED_DEPTH:
 
             if zed.grab(runtime) != sl.ERROR_CODE.SUCCESS:
@@ -115,7 +120,7 @@ def vision_loop():
 
             if not ret:
                 print("[ERROR] Failed to read frame")
-                running = False
+                state.running = False
                 break
 
         results = model(
@@ -207,8 +212,8 @@ def vision_loop():
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
 
         with state.frame_lock:
-            latest_detections = detections
-            latest_frame = frame.copy()
+            state.latest_detections = detections
+            state.latest_frame = frame.copy()
 
         now = time.time()
         if now - last_auto_announce_time >= VISION_ANNOUNCE_INTERVAL:
@@ -253,7 +258,7 @@ def vision_loop():
 
         key = cv2.waitKey(1) & 0xFF
         if key == 27 or key == ord("q"):
-            running = False
+            state.running = False
             break
 
     if USE_ZED_DEPTH:

@@ -60,6 +60,9 @@ def record_until_silence(
             if not speech_detected:
 
                 if volume > START_SPEECH_THRESHOLD:
+                    
+                    print("[VOICE DETECTED]")
+                    
                     speech_detected = True
                     silent_chunks = 0
                     start_time = time.time()

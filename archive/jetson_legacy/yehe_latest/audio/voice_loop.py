@@ -32,12 +32,6 @@ from assistant.query_handler import (
 )
 
 def voice_loop():
-    global running
-    global last_user_interaction_time
-    global voice_interaction_active
-    global wake_block_until
-    global tts_playing
-
     wakeword_model.reset()
     pa = pyaudio.PyAudio()
     device_index = get_input_device_index(pa)
@@ -57,8 +51,8 @@ def voice_loop():
 
             print("[VOICE] Wake word accepted.")
 
-            voice_interaction_active = True
-            last_user_interaction_time = time.time()
+            state.voice_interaction_active = True
+            state.last_user_interaction_time = time.time()
 
             clear_speech_queue()
 
@@ -70,7 +64,7 @@ def voice_loop():
             with speech_lock:
                 speak("Yes?")
 
-            time.sleep(0.3)
+            time.sleep(0.8)
 
             try:
                 raw_audio = record_until_silence(
@@ -81,8 +75,8 @@ def voice_loop():
             except Exception as e:
                 print(f"[VOICE ERROR] Audio capture failed: {e}")
 
-                voice_interaction_active = False
-                wake_block_until = time.time() + WAKE_RESTART_DELAY
+                state.voice_interaction_active = False
+                state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
                 try:
                     wakeword_model.reset()
@@ -98,8 +92,8 @@ def voice_loop():
                 if raw_audio.getbuffer().nbytes == 0:
                     print("[VOICE] Empty audio buffer.")
 
-                    voice_interaction_active = False
-                    wake_block_until = time.time() + WAKE_RESTART_DELAY
+                    state.voice_interaction_active = False
+                    state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
                     try:
                         wakeword_model.reset()
@@ -112,8 +106,8 @@ def voice_loop():
             except Exception as e:
                 print(f"[VOICE ERROR] Invalid audio buffer: {e}")
 
-                voice_interaction_active = False
-                wake_block_until = time.time() + WAKE_RESTART_DELAY
+                state.voice_interaction_active = False
+                state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
                 try:
                     wakeword_model.reset()
@@ -130,8 +124,8 @@ def voice_loop():
             except Exception as e:
                 print(f"[VOICE ERROR] Transcription failed: {e}")
 
-                voice_interaction_active = False
-                wake_block_until = time.time() + WAKE_RESTART_DELAY
+                state.voice_interaction_active = False
+                state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
                 try:
                     wakeword_model.reset()
@@ -144,8 +138,8 @@ def voice_loop():
             if not transcript or not transcript.strip():
                 print("[VOICE] No valid speech detected.")
 
-                voice_interaction_active = False
-                wake_block_until = time.time() + WAKE_RESTART_DELAY
+                state.voice_interaction_active = False
+                state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
                 try:
                     wakeword_model.reset()
@@ -159,7 +153,7 @@ def voice_loop():
 
             print(f"[HEARD] {normalized_transcript}")
 
-            last_user_interaction_time = time.time()
+            state.last_user_interaction_time = time.time()
 
             with frame_lock:
                 detections_copy = list(state.latest_detections)
@@ -182,7 +176,7 @@ def voice_loop():
                 with speech_lock:
                     speak("Stopping live vision assistant.")
 
-                running = False
+                state.running = False
                 break
 
             clear_speech_queue()
@@ -194,10 +188,10 @@ def voice_loop():
             except Exception as e:
                 print(f"[VOICE ERROR] TTS failed: {e}")
 
-            last_user_interaction_time = time.time()
-            voice_interaction_active = False
+            state.last_user_interaction_time = time.time()
+            state.voice_interaction_active = False
 
-            wake_block_until = time.time() + WAKE_RESTART_DELAY
+            state.wake_block_until = time.time() + WAKE_RESTART_DELAY
 
             try:
                 wakeword_model.reset()
@@ -213,7 +207,7 @@ def voice_loop():
                 pass
 
     finally:
-        voice_interaction_active = False
+        state.voice_interaction_active = False
 
         try:
             wakeword_model.reset()
