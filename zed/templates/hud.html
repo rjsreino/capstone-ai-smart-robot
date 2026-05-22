@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VICKY Remote Supervisor HUD</title>
+    <style>
+        :root {
+            --bg-dark: #0a0e14;
+            --bg-panel: #131a22;
+            --text-main: #e2e8f0;
+            --text-muted: #8892b0;
+            --accent-blue: #00bcd4;
+            --accent-green: #4caf50;
+            --accent-yellow: #ffeb3b;
+            --accent-red: #f44336;
+            --border-color: #232d38;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: var(--bg-panel);
+            padding: 10px 20px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        header h1 {
+            margin: 0;
+            font-size: 1.3rem;
+            color: var(--accent-blue);
+            font-weight: 600;
+            letter-spacing: 1px;
+        }
+
+        .status-badge {
+            background-color: #1e293b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            border: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-red);
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .dot.connected {
+            background-color: var(--accent-green);
+            box-shadow: 0 0 8px var(--accent-green);
+        }
+
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .left-panel {
+            width: 320px;
+            border-right: 2px solid var(--border-color);
+            background-color: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            gap: 15px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        .panel-section {
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            background-color: rgba(10, 14, 20, 0.5);
+        }
+
+        .panel-section h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            font-size: 0.95rem;
+            color: var(--accent-blue);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.8rem;
+        }
+
+        .meta-label {
+            color: var(--text-muted);
+        }
+
+        .meta-val {
+            text-align: right;
+            font-weight: 500;
+        }
+
+        .center-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 15px;
+            box-sizing: border-box;
+            background-color: var(--bg-dark);
+            gap: 15px;
+        }
+
+        .bev-container {
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background-color: var(--bg-panel);
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .right-panel {
+            width: 420px;
+            border-left: 2px solid var(--border-color);
+            background-color: var(--bg-panel);
+            display: flex;
+            flex-direction: column;
+            padding: 15px;
+            gap: 15px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+
+        .video-container {
+            border: 2px solid var(--border-color);
+            border-radius: 6px;
+            overflow: hidden;
+            background-color: #000;
+            position: relative;
+            aspect-ratio: 16/9;
+            width: 100%;
+        }
+
+        .video-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .video-placeholder {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            text-align: center;
+        }
+
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+            margin-top: 5px;
+        }
+
+        .stats-table th, .stats-table td {
+            border: 1px solid var(--border-color);
+            padding: 6px 8px;
+            text-align: left;
+        }
+
+        .stats-table th {
+            background-color: rgba(255,255,255,0.05);
+            color: var(--accent-blue);
+        }
+
+        .stats-table td {
+            font-family: monospace;
+        }
+
+        .threat-indicator {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .threat-safe {
+            background-color: rgba(76, 175, 80, 0.2);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .threat-warning {
+            background-color: rgba(255, 235, 59, 0.2);
+            color: var(--accent-yellow);
+            border: 1px solid var(--accent-yellow);
+        }
+
+        .threat-danger {
+            background-color: rgba(244, 67, 54, 0.2);
+            color: var(--accent-red);
+            border: 1px solid var(--accent-red);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>VICKY PROJECT REMOTE HUD</h1>
+        <div class="status-badge">
+            <span class="dot" id="statusDot"></span>
+            <span id="statusText">DISCONNECTED</span>
+        </div>
+    </header>
+
+    <div class="main-container">
+        <!-- Left Panel: Session Metadata & Settings -->
+        <div class="left-panel">
+            <div class="panel-section">
+                <h3>METADATA</h3>
+                <div class="meta-grid">
+                    <span class="meta-label">Session ID:</span>
+                    <span class="meta-val" id="metaSession">-</span>
+                    <span class="meta-label">Compute Mode:</span>
+                    <span class="meta-val" id="metaCompute">-</span>
+                    <span class="meta-label">Perception Mode:</span>
+                    <span class="meta-val" id="metaPerception">-</span>
+                    <span class="meta-label">Timestamp:</span>
+                    <span class="meta-val" id="metaTime">-</span>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>SPATIAL telemetry</h3>
+                <div class="meta-grid">
+                    <span class="meta-label">Left Zone:</span>
+                    <span class="meta-val" id="teleLeft">- mm</span>
+                    <span class="meta-label">Center Zone:</span>
+                    <span class="meta-val" id="teleCenter">- mm</span>
+                    <span class="meta-label">Right Zone:</span>
+                    <span class="meta-val" id="teleRight">- mm</span>
+                    <span class="meta-label">Escape Vector:</span>
+                    <span class="meta-val" id="teleEscape">-</span>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>POSE (SLAM)</h3>
+                <div class="meta-grid">
+                    <span class="meta-label">X Coordinate:</span>
+                    <span class="meta-val" id="poseX">0.00 m</span>
+                    <span class="meta-label">Y Coordinate:</span>
+                    <span class="meta-val" id="poseY">0.00 m</span>
+                    <span class="meta-label">Z Coordinate:</span>
+                    <span class="meta-val" id="poseZ">0.00 m</span>
+                    <span class="meta-label">Yaw angle:</span>
+                    <span class="meta-val" id="poseYaw">0.0°</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center Panel: 10m x 10m Bird's Eye View Grid Map -->
+        <div class="center-panel">
+            <div class="bev-container">
+                <canvas id="bevCanvas" width="550" height="550"></canvas>
+            </div>
+        </div>
+
+        <!-- Right Panel: Live Feed & Performance Statistics -->
+        <div class="right-panel">
+            <div class="panel-section">
+                <h3>LIVE CAMERA CORRIDOR FEED</h3>
+                <div class="video-container">
+                    <img id="videoFeed" class="video-feed" style="display:none;" />
+                    <div id="videoPlaceholder" class="video-placeholder">
+                        Waiting for remote edge video stream...
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel-section">
+                <h3>SAFETY REACTION TIME (SRT) AGGREGATES</h3>
+                <table class="stats-table">
+                    <thead>
+                        <tr>
+                            <th>Metric</th>
+                            <th>Value (ms)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Total SRT (Mean μ)</td>
+                            <td id="srtMean">0.00</td>
+                        </tr>
+                        <tr>
+                            <td>Total SRT (Std Dev σ)</td>
+                            <td id="srtStd">0.00</td>
+                        </tr>
+                        <tr>
+                            <td>Min Latency</td>
+                            <td id="srtMin">0.00</td>
+                        </tr>
+                        <tr>
+                            <td>Max Latency</td>
+                            <td id="srtMax">0.00</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="panel-section">
+                <h3>LATENCY PROFILE</h3>
+                <div class="meta-grid">
+                    <span class="meta-label">Network RTT:</span>
+                    <span class="meta-val" id="latNetwork">0 ms</span>
+                    <span class="meta-label">Inference Latency:</span>
+                    <span class="meta-val" id="latInference">0 ms</span>
+                    <span class="meta-label">Total SRT:</span>
+                    <span class="meta-val" id="latTotal">0 ms</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById("bevCanvas");
+        const ctx = canvas.getContext("2d");
+        
+        // Settings for drawing
+        const scale = 50; // 50 pixels = 1 meter (10m x 10m fits on a 500x500 canvas with padding)
+        let pathHistory = [];
+        let currentPose = { x: 0, y: 0, z: 0, yaw: 0 };
+        let obstacles = [];
+        let srtValues = [];
+
+        function initCanvas() {
+            ctx.fillStyle = "#131a22";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid lines
+            ctx.strokeStyle = "#232d38";
+            ctx.lineWidth = 1;
+            
+            const gridSpacing = scale; // 1 meter spacing
+            const width = canvas.width;
+            const height = canvas.height;
+            
+            for (let x = 0; x < width; x += gridSpacing) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+            for (let y = 0; y < height; y += gridSpacing) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+
+            // Draw center axes (0,0 reference)
+            ctx.strokeStyle = "#384554";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(width / 2, 0);
+            ctx.lineTo(width / 2, height);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(0, height / 2);
+            ctx.lineTo(width, height / 2);
+            ctx.stroke();
+
+            // Label coordinates
+            ctx.fillStyle = "#8892b0";
+            ctx.font = "10px sans-serif";
+            ctx.fillText("5m", width - 25, height / 2 - 5);
+            ctx.fillText("-5m", 10, height / 2 - 5);
+            ctx.fillText("-5m (z)", width / 2 + 5, height - 10);
+            ctx.fillText("5m (z)", width / 2 + 5, 15);
+        }
+
+        function project(x, z) {
+            // Project metric coordinates (x, z) relative to starting origin (0,0)
+            // Center of canvas = 0, 0
+            const cx = canvas.width / 2;
+            const cy = canvas.height / 2;
+            
+            // Z represents distance (forward/backward) mapped to canvas Y axis
+            // X represents lateral width (right/left) mapped to canvas X axis
+            return {
+                x: cx + x * scale,
+                y: cy - z * scale
+            };
+        }
+
+        function drawMap() {
+            initCanvas();
+
+            // Draw path history
+            if (pathHistory.length > 1) {
+                ctx.strokeStyle = "#00bcd4";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                const start = project(pathHistory[0].x, pathHistory[0].z);
+                ctx.moveTo(start.x, start.y);
+                for (let i = 1; i < pathHistory.length; i++) {
+                    const p = project(pathHistory[i].x, pathHistory[i].z);
+                    ctx.lineTo(p.x, p.y);
+                }
+                ctx.stroke();
+            }
+
+            // Draw obstacles
+            obstacles.forEach(obj => {
+                const pos = project(obj.x, obj.z);
+                
+                // Color gradients based on threat proximity
+                const dist = Math.sqrt(obj.x * obj.x + obj.z * obj.z);
+                let color = "rgba(0, 188, 212, 0.7)"; // Blue for safe/far
+                
+                if (dist < 0.8) {
+                    color = "rgba(244, 67, 54, 0.85)"; // Red for danger
+                } else if (dist < 1.5) {
+                    color = "rgba(255, 235, 59, 0.85)"; // Yellow for warning
+                }
+
+                // Render obstacle block
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(pos.x, pos.y, 12, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // Text tag
+                ctx.fillStyle = "#fff";
+                ctx.font = "bold 9px sans-serif";
+                ctx.textAlign = "center";
+                ctx.fillText(obj.class, pos.x, pos.y - 18);
+                ctx.fillText(`${dist.toFixed(1)}m`, pos.x, pos.y + 22);
+            });
+
+            // Draw User current pose (robot/camera position)
+            const userPos = project(currentPose.x, currentPose.z);
+            ctx.fillStyle = "#4caf50"; // Green arrow/dot for active position
+            ctx.beginPath();
+            ctx.arc(userPos.x, userPos.y, 8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Draw heading line based on yaw (in degrees)
+            const angleRad = (currentPose.yaw * Math.PI) / 180;
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(userPos.x, userPos.y);
+            ctx.lineTo(
+                userPos.x + Math.sin(angleRad) * 20,
+                userPos.y - Math.cos(angleRad) * 20
+            );
+            ctx.stroke();
+        }
+
+        function calculateStatistics(srtVal) {
+            srtValues.push(srtVal);
+            if (srtValues.length > 200) {
+                srtValues.shift(); // rolling window
+            }
+
+            const n = srtValues.length;
+            if (n === 0) return;
+
+            const sum = srtValues.reduce((a, b) => a + b, 0);
+            const mean = sum / n;
+            const variance = srtValues.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+            const stdDev = Math.sqrt(variance);
+
+            const min = Math.min(...srtValues);
+            const max = Math.max(...srtValues);
+
+            document.getElementById("srtMean").innerText = mean.toFixed(2);
+            document.getElementById("srtStd").innerText = stdDev.toFixed(2);
+            document.getElementById("srtMin").innerText = min.toFixed(2);
+            document.getElementById("srtMax").innerText = max.toFixed(2);
+        }
+
+        // WebSockets Client logic
+        const host = window.location.host;
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        
+        const wsTelemetry = new WebSocket(`${protocol}//${host}/ws/hud`);
+        const wsVideo = new WebSocket(`${protocol}//${host}/ws/video`);
+        
+        wsTelemetry.onopen = () => {
+            document.getElementById("statusDot").className = "dot connected";
+            document.getElementById("statusText").innerText = "CONNECTED";
+        };
+        
+        wsTelemetry.onclose = () => {
+            document.getElementById("statusDot").className = "dot";
+            document.getElementById("statusText").innerText = "DISCONNECTED";
+        };
+
+        wsTelemetry.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            
+            // Extract telemetry details
+            const metadata = data.packet_metadata || {};
+            const pose = data.user_spatial_pose || {};
+            const pos = pose.position_meters || {};
+            const rot = pose.rotation_degrees || {};
+            const zones = data.spatial_depth_zones || {};
+            const objects = data.semantic_objects_in_frustum || [];
+            const perf = data.performance_metrics || {};
+
+            // Update HTML text
+            document.getElementById("metaSession").innerText = metadata.session_id || "-";
+            document.getElementById("metaCompute").innerText = metadata.compute_node || "-";
+            document.getElementById("metaPerception").innerText = metadata.mode_flag || "-";
+            document.getElementById("metaTime").innerText = new Date(metadata.timestamp * 1000).toLocaleTimeString();
+
+            document.getElementById("teleLeft").innerText = `${zones.left_clearance_mm?.toFixed(0) || 0} mm`;
+            document.getElementById("teleCenter").innerText = `${zones.center_clearance_mm?.toFixed(0) || 0} mm`;
+            document.getElementById("teleRight").innerText = `${zones.right_clearance_mm?.toFixed(0) || 0} mm`;
+            document.getElementById("teleEscape").innerText = zones.escape_vector || "-";
+            
+            // Set threat color styling based on escape vector / center distance
+            const escapeEl = document.getElementById("teleEscape");
+            escapeEl.className = "meta-val";
+            if (zones.center_clearance_mm < 800) {
+                escapeEl.classList.add("threat-danger");
+            } else if (zones.center_clearance_mm < 1500) {
+                escapeEl.classList.add("threat-warning");
+            } else {
+                escapeEl.classList.add("threat-safe");
+            }
+
+            // Pose mapping
+            document.getElementById("poseX").innerText = `${pos.x?.toFixed(2) || 0.0} m`;
+            document.getElementById("poseY").innerText = `${pos.y?.toFixed(2) || 0.0} m`;
+            document.getElementById("poseZ").innerText = `${pos.z?.toFixed(2) || 0.0} m`;
+            document.getElementById("poseYaw").innerText = `${rot.yaw?.toFixed(1) || 0.0}°`;
+
+            // Performance numbers
+            document.getElementById("latNetwork").innerText = `${perf.network_rtt_ms?.toFixed(0) || 0} ms`;
+            document.getElementById("latInference").innerText = `${perf.inference_latency_ms?.toFixed(0) || 0} ms`;
+            document.getElementById("latTotal").innerText = `${perf.total_srt_ms?.toFixed(0) || 0} ms`;
+
+            // Run stats calculator
+            if (perf.total_srt_ms > 0) {
+                calculateStatistics(perf.total_srt_ms);
+            }
+
+            // Update Canvas Pose
+            currentPose = {
+                x: pos.x || 0.0,
+                y: pos.y || 0.0,
+                z: pos.z || 0.0,
+                yaw: rot.yaw || 0.0
+            };
+
+            // Add path point if moved significantly
+            if (pathHistory.length === 0) {
+                pathHistory.push({ x: currentPose.x, z: currentPose.z });
+            } else {
+                const lastPoint = pathHistory[pathHistory.length - 1];
+                const distMoved = Math.sqrt(Math.pow(currentPose.x - lastPoint.x, 2) + Math.pow(currentPose.z - lastPoint.z, 2));
+                if (distMoved > 0.05) { // 5cm movement threshold
+                    pathHistory.push({ x: currentPose.x, z: currentPose.z });
+                    if (pathHistory.length > 500) pathHistory.shift(); // limit history size
+                }
+            }
+
+            // Map obstacles list
+            obstacles = objects.map(obj => {
+                const coords = obj["3d_coordinates"] || {};
+                return {
+                    x: coords.x || 0.0,
+                    z: coords.z || 0.0,
+                    class: obj.class || "object"
+                };
+            });
+
+            // Re-render
+            drawMap();
+        };
+
+        // Video socket frame receiver (receives raw JPEGs in binary)
+        wsVideo.onmessage = (event) => {
+            const blob = event.data;
+            const imgUrl = URL.createObjectURL(blob);
+            const feedImg = document.getElementById("videoFeed");
+            const placeholder = document.getElementById("videoPlaceholder");
+            
+            feedImg.src = imgUrl;
+            feedImg.style.display = "block";
+            placeholder.style.display = "none";
+            
+            // Release memory once loaded
+            feedImg.onload = () => {
+                URL.revokeObjectURL(imgUrl);
+            };
+        };
+
+        // Draw initial setup
+        initCanvas();
+    </script>
+</body>
+</html>

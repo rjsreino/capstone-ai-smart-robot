@@ -1,0 +1,37 @@
+# Use a lightweight official Python image
+FROM python:3.11-slim
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies needed for compilation (e.g. greenlet/SQLAlchemy dependencies)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install python dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    websockets \
+    sqlalchemy \
+    aiosqlite \
+    asyncpg \
+    ultralytics \
+    opencv-python-headless
+
+# Copy the server, database files, and templates
+COPY zed/vicky_server.py /app/vicky_server.py
+COPY zed/vicky_db.py /app/vicky_db.py
+COPY zed/templates /app/templates
+COPY yolov8n.pt /app/yolov8n.pt
+
+# Expose the port FastAPI runs on
+EXPOSE 8000
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV DATABASE_URL=sqlite+aiosqlite:////app/vicky_logs.db
+
+# Run the FastAPI server using uvicorn
+CMD ["uvicorn", "vicky_server:app", "--host", "0.0.0.0", "--port", "8000"]
