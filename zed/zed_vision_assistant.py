@@ -41,7 +41,7 @@ from llm_reasoner import ask_llm
 # CONSTANTS & CONFIGURATION
 # ==========================================
 MODEL_PATH = "yolov8n.pt"
-MIC_INDEX = 0             # -1 for auto-detect microphone index
+MIC_INDEX = -1             # -1 for auto-detect microphone index
 SD_WAKE_DEVICE_INDEX = -1    # -1 for default sounddevice device index
 WAKEWORD_NAME = "jarvis"
 TTS_VOICE = "en-US-GuyNeural"
