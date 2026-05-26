@@ -116,8 +116,15 @@ SD_SAMPLE_RATE = 16000
 # =========================
 # GLOBAL STATE
 # =========================
-running = True
 
+running = True
+guidance_cmd = "WAIT"
+
+zones_data = {
+    "left": 0,
+    "center": 0,
+    "right": 0
+}
 latest_detections = []
 latest_frame = None
 frame_lock = threading.Lock()
@@ -900,9 +907,10 @@ def vision_loop():
         zed = sl.Camera()
 
         init_params = sl.InitParameters()
-        init_params.depth_mode = sl.DEPTH_MODE.NONE
+        init_params.depth_mode = sl.DEPTH_MODE.PERFORMANCE
         init_params.coordinate_units = sl.UNIT.METER
         init_params.camera_resolution = sl.RESOLUTION.VGA
+        init_params.camera_fps = 30
 
         status = zed.open(init_params)
 
