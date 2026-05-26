@@ -46,7 +46,7 @@ parser.add_argument("--perception", type=str, choices=["A", "B"], default="A",
                     help="Perception Paradigm: A=YOLO+Depth Context, B=Visual VLM")
 parser.add_argument("--safety", type=str, choices=["X", "Y"], default="X",
                     help="Safety Alerting: X=Deterministic Clicks, Y=Conversational Speech")
-parser.add_argument("--server", type=str, default="localhost:8000",
+parser.add_argument("--server", type=str, default="127.0.0.1:8000",
                     help="IP and Port of remote FastAPI Cloud Server")
 parser.add_argument("--session", type=str, default="session_prod_01",
                     help="Session identifier string")
@@ -294,11 +294,10 @@ class VickyEdgeApp:
         self.alert_thread = threading.Thread(target=self._safety_click_alert_worker, daemon=True)
         self.current_center_clearance: float = 5000.0
         
-        # Mode 1 Local Wi-Fi Smartphone Loop Server
+        # Local Wi-Fi Smartphone Loop Server
         self.smartphone_clients: Set[websockets.WebSocketServerProtocol] = set()
-        if COMPUTE_MODE == 1:
-            self.phone_server_thread = threading.Thread(target=self._start_smartphone_server, daemon=True)
-            self.phone_server_thread.start()
+        self.phone_server_thread = threading.Thread(target=self._start_smartphone_server, daemon=True)
+        self.phone_server_thread.start()
 
     def _start_smartphone_server(self) -> None:
         """Runs a localized WebSocket server to feed commands to the smartphone transceiver."""
@@ -318,9 +317,13 @@ class VickyEdgeApp:
                     self.smartphone_clients.remove(websocket)
                 print("[EDGE SERVER] Smartphone audio transceiver unlinked.")
                 
-        start_server = websockets.serve(handler, "0.0.0.0", 8005)
-        loop.run_until_complete(start_server)
-        loop.run_forever()
+        try:
+            start_server = websockets.serve(handler, "0.0.0.0", 8005)
+            loop.run_until_complete(start_server)
+            print("[EDGE SERVER] Local smartphone WebSocket server listening on port 8005.")
+            loop.run_forever()
+        except Exception as e:
+            print(f"[EDGE SERVER WARNING] Failed to start smartphone WebSocket server on port 8005: {e}")
 
     async def broadcast_to_smartphone(self, message_text: str) -> None:
         """Broadcasts navigation guidance strings to connected smartphone web app clients."""
@@ -378,7 +381,9 @@ class VickyEdgeApp:
         print("[CLIENT HYBRID] Dispatching VLM query asynchronously over cellular link...")
         res = await loop.run_in_executor(None, make_http_call)
         if "error" not in res:
-            print(f"[CLIENT HYBRID ANSWER] Server VLM Response: '{res.get('response')}' (Latency: {res.get('inference_latency_ms', 0):.0f}ms)")
+            response_text = res.get("response", "")
+            print(f"[CLIENT HYBRID ANSWER] Server VLM Response: '{response_text}' (Latency: {res.get('inference_latency_ms', 0):.0f}ms)")
+            await self.broadcast_to_smartphone(f"Cloud update: {response_text}")
         else:
             print(f"[CLIENT HYBRID ERROR] Server VLM query failed: {res['error']}")
 
@@ -524,6 +529,12 @@ class VickyEdgeApp:
                         total_delay_ms = (time.time() - start_time) * 1000.0
                         
                         print(f"[HUD CLOUD] SRT: {total_delay_ms:.1f}ms | Server Latency: {inference_ms:.1f}ms | Zones (C): {self.current_center_clearance:.0f}mm | Vector: {server_zones.get('escape_vector')}")
+                        
+                        if self.current_center_clearance < 1200:
+                            audio_text_guidance = f"Obstacle ahead. Please {server_zones.get('escape_vector', 'STOP! BLOCKED').lower()}."
+                        else:
+                            audio_text_guidance = "Path ahead looks clear."
+                        await self.broadcast_to_smartphone(audio_text_guidance)
                     
                     except Exception as se:
                         print(f"[CLIENT SERVER ERROR] Mode 2 closed-loop streaming failed: {se}")
@@ -539,6 +550,12 @@ class VickyEdgeApp:
                 inference_ms = (time.time() - inference_start) * 1000.0
                 
                 self.current_center_clearance = zones["center_clearance_mm"]
+                
+                if zones["center_clearance_mm"] < 1200:
+                    audio_text_guidance = f"Obstacle ahead. Please {zones['escape_vector'].lower()}."
+                else:
+                    audio_text_guidance = "Path ahead looks clear."
+                await self.broadcast_to_smartphone(audio_text_guidance)
                 
                 if self.websocket_video and self.websocket_telemetry:
                     try:

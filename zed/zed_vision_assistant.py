@@ -18,6 +18,10 @@ import os
 import queue
 import tempfile
 import asyncio
+import argparse
+import json
+import base64
+import websockets
 from typing import Optional, Dict
 
 import numpy as np
@@ -46,6 +50,31 @@ SD_WAKE_DEVICE_INDEX = -1    # -1 for default sounddevice device index
 WAKEWORD_NAME = "jarvis"
 TTS_VOICE = "en-US-GuyNeural"
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# Server connection defaults
+SERVER_URI = "127.0.0.1:8000"
+SESSION_ID = "session_assistant_prod"
+
+# Telemetry Queue for background streaming (max 5 frames to avoid memory bloat)
+telemetry_queue = queue.Queue(maxsize=5)
+
+def push_telemetry(frame, zones, detections, srt_ms, inference_ms):
+    """Safely pushes a frame and telemetry info to the background thread queue (drops oldest if full)."""
+    if telemetry_queue.full():
+        try:
+            telemetry_queue.get_nowait()
+        except queue.Empty:
+            pass
+    try:
+        telemetry_queue.put_nowait((frame.copy() if frame is not None else None, {
+            "zones": zones.copy() if zones else None,
+            "detections": [d.copy() for d in detections] if detections else [],
+            "srt_ms": srt_ms,
+            "inference_ms": inference_ms,
+            "timestamp": time.time()
+        }))
+    except queue.Full:
+        pass
 
 ALLOWED_CLASSES = {
     "person", "chair", "couch", "bench", "dining table",
@@ -152,6 +181,143 @@ def get_input_device_index(pa: pyaudio.PyAudio) -> Optional[int]:
 
     print("[MIC WARNING] No physical microphone found matching format requirements.")
     return None
+
+# ==========================================
+# BACKGROUND WEBSOCKET TELEMETRY LOOP
+# ==========================================
+async def telemetry_sender_loop():
+    global running
+    print(f"[TELEMETRY] Starting async sender loop. Targeting: {SERVER_URI}")
+    
+    uri_tele = f"ws://{SERVER_URI}/ws/telemetry/stream"
+    uri_video = f"ws://{SERVER_URI}/ws/video/stream"
+    
+    ws_tele = None
+    ws_video = None
+    
+    while running:
+        if ws_tele is None or ws_video is None:
+            try:
+                print(f"[TELEMETRY] Attempting to connect to FastAPI Server (telemetry/video streams)...")
+                ws_tele = await websockets.connect(uri_tele, close_timeout=2)
+                ws_video = await websockets.connect(uri_video, close_timeout=2)
+                print("[TELEMETRY] Connected to server successfully.")
+            except Exception as e:
+                print(f"[TELEMETRY WARNING] Server connection failed: {e}. Retrying in 5 seconds...")
+                ws_tele = None
+                ws_video = None
+                for _ in range(50):
+                    if not running:
+                        break
+                    await asyncio.sleep(0.1)
+                continue
+
+        try:
+            try:
+                frame, data = telemetry_queue.get_nowait()
+            except queue.Empty:
+                await asyncio.sleep(0.05)
+                continue
+                
+            if frame is not None:
+                _, jpeg_buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+                try:
+                    await ws_video.send(jpeg_buf.tobytes())
+                except Exception as ve:
+                    print(f"[TELEMETRY ERROR] Video socket send failed: {ve}")
+                    ws_video = None
+                    ws_tele = None
+                    continue
+
+            pose = {
+                "position_meters": {"x": 0.0, "y": 0.0, "z": 0.0},
+                "rotation_degrees": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+            }
+            
+            zones_payload = {
+                "left_clearance_mm": 5000.0,
+                "center_clearance_mm": 5000.0,
+                "right_clearance_mm": 5000.0,
+                "escape_vector": "STOP"
+            }
+            if data["zones"]:
+                zones_payload = {
+                    "left_clearance_mm": float(data["zones"].get("left", 5000.0)),
+                    "center_clearance_mm": float(data["zones"].get("center", 5000.0)),
+                    "right_clearance_mm": float(data["zones"].get("right", 5000.0)),
+                    "escape_vector": guidance_cmd
+                }
+
+            frustum_objects = []
+            for idx, d in enumerate(data["detections"]):
+                depth_m = d.get("depth_meters") or 0.0
+                lateral_offset = 0.0
+                if d.get("box") and frame is not None:
+                    h, w, _ = frame.shape
+                    x1, y1, x2, y2 = d["box"]
+                    cx = (x1 + x2) / 2
+                    lateral_offset = ((cx - (w / 2.0)) / (w / 2.0)) * depth_m * 0.5
+                    
+                frustum_objects.append({
+                    "tracking_id": idx,
+                    "class": d["class_name"],
+                    "3d_coordinates": {"x": lateral_offset, "y": 0.0, "z": depth_m},
+                    "distance_category": d["distance"]
+                })
+
+            payload = {
+                "packet_metadata": {
+                    "session_id": SESSION_ID,
+                    "timestamp": data["timestamp"],
+                    "compute_node": "local",
+                    "mode_flag": "A"
+                },
+                "user_spatial_pose": pose,
+                "spatial_depth_zones": zones_payload,
+                "semantic_objects_in_frustum": frustum_objects,
+                "performance_metrics": {
+                    "inference_latency_ms": data["inference_ms"],
+                    "network_rtt_ms": 0.0,
+                    "total_srt_ms": data["srt_ms"],
+                    "hallucination_flag": False
+                }
+            }
+
+            try:
+                await ws_tele.send(json.dumps(payload))
+            except Exception as te:
+                print(f"[TELEMETRY ERROR] Telemetry socket send failed: {te}")
+                ws_video = None
+                ws_tele = None
+                continue
+
+            telemetry_queue.task_done()
+
+        except Exception as loop_err:
+            print(f"[TELEMETRY CRITICAL] Error in sender loop: {loop_err}")
+            await asyncio.sleep(1)
+
+    if ws_tele:
+        try:
+            await ws_tele.close()
+        except:
+            pass
+    if ws_video:
+        try:
+            await ws_video.close()
+        except:
+            pass
+    print("[TELEMETRY] Loop ended cleanly.")
+
+def start_telemetry_thread():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(telemetry_sender_loop())
+    except Exception as e:
+        print(f"[TELEMETRY THREAD ERROR] {e}")
+    finally:
+        loop.close()
 
 # ==========================================
 # AUDIO PLAYBACK & SPEECH SYNTHESIS
@@ -404,6 +570,7 @@ def vision_loop():
     cv2.namedWindow("ZED Spatial Live Vision Assistant")
 
     while running:
+        frame_start_time = time.time()
         # Grab frame from ZED
         if not processor.grab_frame():
             time.sleep(0.01)
@@ -554,6 +721,9 @@ def vision_loop():
         current_time = time.time()
         fps = 1.0 / max(current_time - prev_time, 1e-6)
         prev_time = current_time
+
+        total_delay_ms = (current_time - frame_start_time) * 1000.0
+        push_telemetry(annotated, zones_data, detections, total_delay_ms, total_delay_ms)
 
         # 4. Render Dashboard Visual Panels
         display_w = 640
@@ -925,10 +1095,20 @@ def voice_loop():
 # MAIN EXECUTION ENTRYPOINT
 # ==========================================
 def main():
-    global running, ocr_reader
+    global running, ocr_reader, SERVER_URI, SESSION_ID
     print("=" * 60)
     print("      ZED SPATIAL LIVE VISION ASSISTANT (JARVIS)")
     print("=" * 60)
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="ZED Live Vision Assistant")
+    parser.add_argument("--server", type=str, default="127.0.0.1:8000",
+                        help="IP and Port of remote FastAPI Cloud Server")
+    parser.add_argument("--session", type=str, default="session_assistant_prod",
+                        help="Session identifier string")
+    args, _ = parser.parse_known_args()
+    SERVER_URI = args.server
+    SESSION_ID = args.session
 
     # Initialize Pygame Mixer for sound playing
     pygame.mixer.init()
@@ -953,10 +1133,12 @@ def main():
     speaker_thread = threading.Thread(target=speech_worker, daemon=True)
     vision_thread = threading.Thread(target=vision_loop, daemon=True)
     voice_thread = threading.Thread(target=voice_loop, daemon=True)
+    telemetry_thread = threading.Thread(target=start_telemetry_thread, daemon=True)
 
     speaker_thread.start()
     vision_thread.start()
     voice_thread.start()
+    telemetry_thread.start()
 
     try:
         while running:

@@ -74,9 +74,19 @@ class AsyncLogCollector:
 
     async def start(self) -> None:
         """Initialize database tables and start database writer worker task."""
-        async with engine.begin() as conn:
-            # Create tables if they do not exist
-            await conn.run_sync(Base.metadata.create_all)
+        max_retries = 10
+        retry_delay = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                async with engine.begin() as conn:
+                    # Create tables if they do not exist
+                    await conn.run_sync(Base.metadata.create_all)
+                break
+            except Exception as e:
+                print(f"[DB LOGGER WARNING] Database connection attempt {attempt}/{max_retries} failed: {e}")
+                if attempt == max_retries:
+                    raise e
+                await asyncio.sleep(retry_delay)
         
         self.running = True
         self.worker_task = asyncio.create_task(self._db_writer_loop())
