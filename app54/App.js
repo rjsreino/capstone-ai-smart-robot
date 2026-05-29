@@ -138,6 +138,10 @@ export default function App() {
 
   const startRecording = async () => {
     try {
+      await Speech.stop();
+      lastSpoken.current = "";
+      lastCommandTime.current = Date.now();
+
       const permission = await Audio.requestPermissionsAsync();
       if (!permission.granted) return;
 
