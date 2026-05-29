@@ -55,6 +55,16 @@ class ZedDepthProcessor:
         self.none_frame_count = 0
         self.good_frame_count = 0
         
+        # Positional tracking & SLAM data
+        self.tx = 0.0
+        self.ty = 0.0
+        self.tz = 0.0
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
+        self.positional_tracking_enabled = False
+        self.occupancy_grid = np.zeros((100, 100), dtype=np.int8)
+        
     def start(self):
         """Start the ZED camera connection"""
         print("[ZedDepthProcessor] Starting ZED Camera...")
@@ -141,6 +151,16 @@ class ZedDepthProcessor:
         print(f"  Depth Mode: {self.config.depth_mode}")
         print(f"  Depth Range: {self.config.min_depth}-{self.config.max_depth}mm")
         
+        # Enable Positional Tracking / SLAM
+        tracking_params = sl.PositionalTrackingParameters()
+        status_tracking = self.zed.enable_positional_tracking(tracking_params)
+        if status_tracking == sl.ERROR_CODE.SUCCESS:
+            self.positional_tracking_enabled = True
+            print("[ZedDepthProcessor] SLAM Positional Tracking enabled successfully.")
+        else:
+            self.positional_tracking_enabled = False
+            print(f"[ZedDepthProcessor WARNING] Failed to enable positional tracking: {status_tracking}")
+        
     def stop(self):
         """Stop ZED camera connection"""
         if self.zed:
@@ -167,6 +187,40 @@ class ZedDepthProcessor:
         if status == sl.ERROR_CODE.SUCCESS:
             self.good_frame_count += 1
             self.last_frame_time = time.time()
+            
+            # Retrieve camera position relative to World frame
+            if self.positional_tracking_enabled:
+                try:
+                    camera_pose = sl.Pose()
+                    state = self.zed.get_position(camera_pose, sl.REFERENCE_FRAME.WORLD)
+                    if state == sl.POSITIONAL_TRACKING_STATE.OK:
+                        translation = camera_pose.get_translation().get()
+                        self.tx = float(translation[0])
+                        self.ty = float(translation[1])
+                        self.tz = float(translation[2])
+                        
+                        # Euler orientation from orientation quaternion
+                        orientation = camera_pose.get_orientation().get()
+                        qx, qy, qz, qw = orientation[0], orientation[1], orientation[2], orientation[3]
+                        
+                        # yaw
+                        siny_cosp = 2.0 * (qw * qy + qx * qz)
+                        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+                        self.yaw = float(np.degrees(np.arctan2(siny_cosp, cosy_cosp)))
+                        
+                        # pitch
+                        sinp = 2.0 * (qw * qx - qy * qz)
+                        if abs(sinp) >= 1:
+                            self.pitch = float(np.sign(sinp) * 90.0)
+                        else:
+                            self.pitch = float(np.degrees(np.arcsin(sinp)))
+                            
+                        # roll
+                        sinr_cosp = 2.0 * (qw * qz + qx * qy)
+                        cosr_cosp = 1.0 - 2.0 * (qx * qx + qz * qz)
+                        self.roll = float(np.degrees(np.arctan2(sinr_cosp, cosr_cosp)))
+                except Exception as pe:
+                    print(f"[ZedDepthProcessor ERROR] Positional tracking retrieval failed: {pe}")
             
             # Calculate FPS
             self.frame_count += 1
@@ -238,6 +292,10 @@ class ZedDepthProcessor:
         # Calculate safe directions
         safe_directions = self.calculate_safe_directions(grid_depth)
         
+        # Accumulate 2D occupancy grid SLAM map
+        if self.positional_tracking_enabled:
+            self._accumulate_grid(grid_depth)
+        
         return {
             'depth_frame': depth_frame,
             'depth_clipped': depth_clipped,
@@ -248,6 +306,90 @@ class ZedDepthProcessor:
             'fps': self.fps,
             'timestamp': time.time()
         }
+
+    def _accumulate_grid(self, grid_depth: np.ndarray) -> None:
+        """Projects depth points to gravity-aligned World coordinates, filters out floor/ceiling, and runs ray-clearing."""
+        tx_m = self.tx / 1000.0
+        ty_m = self.ty / 1000.0
+        tz_m = self.tz / 1000.0
+        yaw_rad = np.radians(self.yaw)
+        
+        # Grid coordinates of the user (center is 50,50)
+        user_grid_x = max(0, min(int(tx_m / 0.1) + 50, 99))
+        user_grid_z = max(0, min(int(tz_m / 0.1) + 50, 99))
+        
+        # ZED 1 FOV parameters
+        hfov = np.radians(90.0)
+        vfov = np.radians(60.0)
+        h, w = grid_depth.shape
+        
+        # Ray clearing range (m)
+        d_clear_limit = 4.0
+
+        for col in range(w):
+            col_angle = -hfov / 2.0 + col * (hfov / (w - 1))
+            
+            closest_obstacle_d = None
+            closest_obstacle_pt = None
+            
+            for row in range(h):
+                row_angle = vfov / 2.0 - row * (vfov / (h - 1))
+                d_mm = grid_depth[row, col]
+                if d_mm < self.config.min_depth or d_mm > self.config.max_depth:
+                    continue
+                    
+                d_m = d_mm / 1000.0
+                
+                # Point in camera coordinates
+                x_c = d_m * np.sin(col_angle)
+                y_c = d_m * np.sin(row_angle)
+                z_c = d_m * np.cos(col_angle) * np.cos(row_angle)
+                
+                # Rotate around Y-axis (yaw) to world frame coordinates
+                # Gravity-aligned: Y_world points up, X_world lateral, Z_world forward
+                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                y_w = ty_m + y_c
+                
+                # Obstacle height filter: ignore points near floor (e.g. y_world < -0.8m)
+                # and points high up (above 0.4m relative to starting camera height)
+                if -0.8 <= y_w <= 0.4:
+                    if closest_obstacle_d is None or d_m < closest_obstacle_d:
+                        closest_obstacle_d = d_m
+                        closest_obstacle_pt = (x_w, y_w, z_w)
+            
+            if closest_obstacle_pt is not None:
+                # Project obstacle to grid coordinates
+                obs_x, _, obs_z = closest_obstacle_pt
+                grid_x = max(0, min(int(obs_x / 0.1) + 50, 99))
+                grid_z = max(0, min(int(obs_z / 0.1) + 50, 99))
+                
+                # Raycast: clear all cells between user and obstacle
+                steps = max(abs(grid_x - user_grid_x), abs(grid_z - user_grid_z))
+                if steps > 0:
+                    xs = np.linspace(user_grid_x, grid_x, steps + 1)[:-1]
+                    zs = np.linspace(user_grid_z, grid_z, steps + 1)[:-1]
+                    for px, pz in zip(xs, zs):
+                        self.occupancy_grid[int(pz), int(px)] = 0
+                
+                # Mark obstacle cell
+                self.occupancy_grid[grid_z, grid_x] = 1
+            else:
+                # No obstacle in this direction: clear path up to clearing limit
+                x_c = d_clear_limit * np.sin(col_angle)
+                z_c = d_clear_limit * np.cos(col_angle)
+                clear_x = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                clear_z = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                
+                grid_x = max(0, min(int(clear_x / 0.1) + 50, 99))
+                grid_z = max(0, min(int(clear_z / 0.1) + 50, 99))
+                
+                steps = max(abs(grid_x - user_grid_x), abs(grid_z - user_grid_z))
+                if steps > 0:
+                    xs = np.linspace(user_grid_x, grid_x, steps + 1)
+                    zs = np.linspace(user_grid_z, grid_z, steps + 1)
+                    for px, pz in zip(xs, zs):
+                        self.occupancy_grid[int(pz), int(px)] = 0
         
     def create_depth_grid(self, depth_frame: np.ndarray) -> np.ndarray:
         """Divide depth frame into grid and compute average depth per cell"""

@@ -117,6 +117,15 @@ safe_distance_threshold = 1200.0  # mm
 guidance_cmd = "STOP"
 guidance_color = (0, 0, 255)
 zones_data = {'left': 0.0, 'center': 0.0, 'right': 0.0}
+pose_data = {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+occupancy_grid = np.zeros((100, 100), dtype=np.int8).tolist()
+reset_map_flag = False
+semantic_objects = []
+
+def trigger_map_reset():
+    global reset_map_flag
+    reset_map_flag = True
+    print("[zva] Map reset flag set to True.")
 
 ocr_reader = None
 
@@ -540,6 +549,7 @@ def extract_text_from_frame(frame) -> str:
 def vision_loop():
     global latest_detections, latest_frame, latest_depth_map, running
     global guidance_cmd, guidance_color, zones_data, safe_distance_threshold
+    global pose_data, occupancy_grid, reset_map_flag, semantic_objects
 
     # Configure ZED 1 Camera for USB 2.0 fallback connection (VGA @ 15fps)
     config = ZedDepthConfig(
@@ -566,10 +576,21 @@ def vision_loop():
 
     prev_time = time.time()
     last_auto_announce_time = 0.0
+    last_exit_check_time = 0.0
+    last_exit_announce_time = 0.0
+    persistent_exit_signs = {}
 
     cv2.namedWindow("ZED Spatial Live Vision Assistant")
 
     while running:
+        # Check if map reset is requested
+        if reset_map_flag:
+            with frame_lock:
+                processor.occupancy_grid.fill(0)
+                occupancy_grid = processor.occupancy_grid.tolist()
+                reset_map_flag = False
+            print("[VISION] Persistent occupancy grid reset completed in processor.")
+
         frame_start_time = time.time()
         # Grab frame from ZED
         if not processor.grab_frame():
@@ -626,6 +647,12 @@ def vision_loop():
         h, w, _ = rgb_frame.shape
         frame_area = max(w * h, 1)
         detections = []
+        temp_semantic_objects = []
+
+        tx_m = processor.tx / 1000.0
+        tz_m = processor.tz / 1000.0
+        yaw_rad = np.radians(processor.yaw)
+        fov_rad = np.radians(90.0)
 
         if result.boxes is not None and len(result.boxes) > 0:
             for box in result.boxes:
@@ -656,6 +683,21 @@ def vision_loop():
                     depth_distance = float(depth_val_mm) / 1000.0  # mm to meters
 
                 if depth_distance is not None:
+                    # Project object onto 2D grid coordinates
+                    angle_rad = -fov_rad/2.0 + center_x * (fov_rad / w)
+                    x_c = depth_distance * np.sin(angle_rad)
+                    z_c = depth_distance * np.cos(angle_rad)
+                    x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                    z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                    grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
+                    grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
+                    temp_semantic_objects.append({
+                        "label": class_name,
+                        "x": grid_x,
+                        "z": grid_z,
+                        "distance": depth_distance
+                    })
+
                     if depth_distance < 0.8:
                         distance_lbl = "very close"
                     elif depth_distance < 1.5:
@@ -705,11 +747,120 @@ def vision_loop():
 
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
 
+        # 3. Exit Sign Detection (OCR + Green Color Segmentation)
+        now = time.time()
+        if now - last_exit_check_time >= 1.5:
+            last_exit_check_time = now
+            upper_roi = rgb_frame[0:int(h * 0.75), :]
+            
+            # A. EasyOCR text check
+            if ocr_reader is not None:
+                try:
+                    ocr_results = ocr_reader.readtext(upper_roi)
+                    for bbox, text, conf in ocr_results:
+                        text_clean = text.strip().upper()
+                        if "EXIT" in text_clean and conf >= 0.35:
+                            cx = int((bbox[0][0] + bbox[2][0]) / 2)
+                            cy = int((bbox[0][1] + bbox[2][1]) / 2)
+                            
+                            depth_val_mm = depth_frame[cy, cx]
+                            if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
+                                depth_m = float(depth_val_mm) / 1000.0
+                                
+                                angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
+                                x_c = depth_m * np.sin(angle_rad)
+                                z_c = depth_m * np.cos(angle_rad)
+                                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                                
+                                grid_x_exit = max(0, min(int(x_w / 0.1) + 50, 99))
+                                grid_z_exit = max(0, min(int(z_w / 0.1) + 50, 99))
+                                
+                                persistent_exit_signs[(grid_x_exit, grid_z_exit)] = (now, depth_m)
+                                
+                                if now - last_exit_announce_time >= 10.0:
+                                    announce_msg = f"Exit sign detected {depth_m:.1f} meters ahead."
+                                    print(f"[zva OCR] Exit announcement: {announce_msg}")
+                                    if should_announce(announce_msg, now):
+                                        remember_response(announce_msg)
+                                        enqueue_speech(announce_msg)
+                                    last_exit_announce_time = now
+                except Exception as e:
+                    print(f"[zva OCR ERROR] Exit sign scan failed: {e}")
+            
+            # B. Green Color & Aspect Ratio segmentation (for running-man signs without text)
+            try:
+                hsv = cv2.cvtColor(upper_roi, cv2.COLOR_BGR2HSV)
+                # Emerald green bounds
+                lower_green = np.array([35, 75, 75])
+                upper_green = np.array([85, 255, 255])
+                mask = cv2.inRange(hsv, lower_green, upper_green)
+                
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                for cnt in contours:
+                    area = cv2.contourArea(cnt)
+                    if 120 <= area <= 15000:
+                        bx, by, bw, bh = cv2.boundingRect(cnt)
+                        aspect_ratio = float(bw) / bh
+                        fill_ratio = area / (bw * bh)
+                        
+                        # Green emergency exit signs are rectangular with high fill ratio
+                        if 1.2 <= aspect_ratio <= 2.8 and fill_ratio >= 0.7:
+                            cx = bx + bw // 2
+                            cy = by + bh // 2
+                            
+                            depth_val_mm = depth_frame[cy, cx]
+                            if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
+                                depth_m = float(depth_val_mm) / 1000.0
+                                
+                                angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
+                                x_c = depth_m * np.sin(angle_rad)
+                                z_c = depth_m * np.cos(angle_rad)
+                                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                                
+                                grid_x_exit = max(0, min(int(x_w / 0.1) + 50, 99))
+                                grid_z_exit = max(0, min(int(z_w / 0.1) + 50, 99))
+                                
+                                persistent_exit_signs[(grid_x_exit, grid_z_exit)] = (now, depth_m)
+                                
+                                if now - last_exit_announce_time >= 10.0:
+                                    announce_msg = f"Emergency exit sign detected {depth_m:.1f} meters ahead."
+                                    print(f"[zva Color] Green sign announcement: {announce_msg}")
+                                    if should_announce(announce_msg, now):
+                                        remember_response(announce_msg)
+                                        enqueue_speech(announce_msg)
+                                    last_exit_announce_time = now
+            except Exception as e:
+                print(f"[zva Color ERROR] Green sign segmentation failed: {e}")
+
+        # Keep exit signs detected within the last 5.0 seconds
+        persistent_exit_signs = {k: v for k, v in persistent_exit_signs.items() if now - v[0] < 5.0}
+        
+        # Populate persistent exit signs in semantic objects list
+        for (gx, gz), (ts, dist) in persistent_exit_signs.items():
+            temp_semantic_objects.append({
+                "label": "exit sign",
+                "x": gx,
+                "z": gz,
+                "distance": dist
+            })
+
         # Thread-safe global update
         with frame_lock:
             latest_detections = detections
             latest_frame = rgb_frame.copy()
             latest_depth_map = depth_frame.copy()
+            pose_data = {
+                "x": float(processor.tx),
+                "y": float(processor.ty),
+                "z": float(processor.tz),
+                "roll": float(processor.roll),
+                "pitch": float(processor.pitch),
+                "yaw": float(processor.yaw)
+            }
+            occupancy_grid = processor.occupancy_grid.tolist()
+            semantic_objects = temp_semantic_objects
 
         # 3. Proactive Auto Announcement
         now = time.time()

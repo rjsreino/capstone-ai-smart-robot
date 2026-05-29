@@ -53,6 +53,7 @@ graph TD
 ---
 
 ## 📂 Codebase Directory Structure (`/zed`)
+* [server.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/server.py): Main unified system entrypoint. Boots the ZED camera vision loop in a background thread and exposes FastAPI REST endpoints for client voice commands, live navigation status, and mock maps.
 * [zed_depth_processor.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_depth_processor.py): Interfaces with the ZED SDK. Configured for VGA @ 15fps resolution to accommodate USB 2.0 bandwidth fallback. Calculates Left, Center, and Right obstacle distances.
 * [zed_room_guidance.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_room_guidance.py): Visual room dashboard display displaying depth heatmap streams and dynamic steering vector suggestions.
 * [zed_vision_assistant.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_vision_assistant.py): Master application loop coordinating YOLOv8, EasyOCR, wake word engine (`openwakeword` listening for *"Jarvis"*), Whisper tiny transcriber, local Ollama Phi-3 reasoner, and background WebSocket telemetry feeds.
@@ -69,32 +70,23 @@ graph TD
 ### 1. Pre-requisites & Library Setup
 Make sure the ZED SDK is installed, then install Python dependencies:
 ```bash
-pip install fastapi uvicorn websockets sqlalchemy aiosqlite ultralytics easyocr pygame edge-tts whisper sounddevice soundfile pyaudio openwakeword
+pip install fastapi uvicorn websockets sqlalchemy aiosqlite ultralytics easyocr pygame edge-tts whisper sounddevice soundfile pyaudio openwakeword python-multipart
 ```
 
-### 2. Start the FastAPI Cloud Backend
-Runs the server hosting the dashboard and database logs:
+### 2. Start the Unified Server (Local AI Server)
+Runs the unified entrypoint which initiates the ZED camera loop in the background and launches the FastAPI server:
 ```bash
-python zed/vicky_server.py
+python zed/server.py
 ```
-* **HUD Dashboard**: Open `http://127.0.0.1:8000` in a browser.
+* **API Endpoints**:
+  * `GET http://127.0.0.1:8000/status`: Polled by client apps for live spatial tracking coordinates, guidance, detections, calculated A* paths, and active navigation goals.
+  * `GET http://127.0.0.1:8000/map`: Interactive HSL-themed supervisor HUD canvas dashboard showing live ZED pose (blue marker + yaw), obstacles (red), A* path (green), and goal (golden target). Allows clicking on the grid to change the destination dynamically.
+  * `POST http://127.0.0.1:8000/api/set-goal`: Sets the active navigation goal index coordinate `(row, col)` (or clears it if coordinates are empty).
+  * `POST http://127.0.0.1:8000/api/reset-map`: Clears the persistent SLAM depth obstacle grid from the processor context thread-safely.
+  * `POST http://127.0.0.1:8000/voice-command`: Receives uploaded compressed audio files from the smartphone, runs Whisper STT transcription, and queries LLM reasoning logic.
 
-### 3. Start the Jarvis Live Vision Assistant
-Launches ZED camera loops, voice wake-word matching, local YOLO/OCR, and telemetric dashboard streaming:
-```bash
-python zed/zed_vision_assistant.py
-```
-* Say **"Jarvis"** to activate, and ask: *"Which direction is safe to turn?"* or *"What objects do you see?"*.
-
-### 4. Run the Edge Client (Simulation or ZED modes)
-Runs the edge-to-server data pipe using the three compute paradigms:
-* **Local Mode (1)**: `python zed/vicky_edge_client.py --simulated --mode 1`
-* **Pure Cloud Mode (2)**: `python zed/vicky_edge_client.py --simulated --mode 2`
-* **Hybrid Mode (3)**: `python zed/vicky_edge_client.py --simulated --mode 3`
-*(Omit `--simulated` to grab physical streams from the ZED camera).*
-
-### 5. Run Performance Benchmarking
-Simulates system loops to calculate safety reaction times across various modes:
+### 3. Running Simulation / Performance Benchmarking
+Simulates system execution cycles to calculate safety reaction times across various modes:
 ```bash
 python zed/vicky_benchmarker.py --trials 200
 ```

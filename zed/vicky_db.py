@@ -65,6 +65,17 @@ class SpatialLog(Base):
     total_srt_ms = Column(Float, default=0.0, nullable=False)
     hallucination_flag = Column(Boolean, default=False, nullable=False)
 
+class OccupancyMap(Base):
+    __tablename__ = "vicky_occupancy_maps"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String, index=True, nullable=False)
+    timestamp = Column(Float, index=True, nullable=False)
+    pose_x = Column(Float, default=0.0, nullable=False)
+    pose_z = Column(Float, default=0.0, nullable=False)
+    yaw = Column(Float, default=0.0, nullable=False)
+    grid_data = Column(JSON, nullable=False)
+
 # Asynchronous log queue worker to enable non-blocking logging
 class AsyncLogCollector:
     def __init__(self) -> None:

@@ -17,8 +17,7 @@ import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle, Line, Polygon } from "react-native-svg";
-
-const BASE_URL = "http://192.168.45.5:8000";
+import { WebView } from "react-native-webview";
 
 const RECORDING_OPTIONS = {
   android: {
@@ -42,6 +41,7 @@ const RECORDING_OPTIONS = {
 };
 
 export default function App() {
+  const [serverUrl, setServerUrl] = useState("http://192.168.45.5:8000");
   const [data, setData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
@@ -188,7 +188,7 @@ export default function App() {
         type: "audio/x-caf",
       });
 
-      const response = await fetch(`${BASE_URL}/voice-command`, {
+      const response = await fetch(`${serverUrl}/voice-command`, {
         method: "POST",
         body: formData,
       });
@@ -261,7 +261,7 @@ export default function App() {
     try {
       const userCommand = command;
 
-      const response = await fetch(`${BASE_URL}/command`, {
+      const response = await fetch(`${serverUrl}/command`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: userCommand }),
@@ -278,17 +278,17 @@ export default function App() {
 
       await Speech.stop();
 
-await Audio.setAudioModeAsync({
-  allowsRecordingIOS: false,
-  playsInSilentModeIOS: true,
-  staysActiveInBackground: false,
-  shouldDuckAndroid: false,
-  playThroughEarpieceAndroid: false,
-});
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
 
-await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
-Speech.speak(answer, {
+      Speech.speak(answer, {
         language: "en-US",
         rate: 0.9,
         pitch: 1.0,
@@ -304,7 +304,7 @@ Speech.speak(answer, {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const response = await fetch(`${BASE_URL}/status`);
+        const response = await fetch(`${serverUrl}/status`);
         const json = await response.json();
 
         setData(json);
@@ -319,7 +319,7 @@ Speech.speak(answer, {
     fetchStatus();
     const interval = setInterval(fetchStatus, 1000);
     return () => clearInterval(interval);
-  }, []);
+  }, [serverUrl]);
 
   const left = data?.left_distance ?? 0;
   const center = data?.center_distance ?? 0;
@@ -361,6 +361,19 @@ Speech.speak(answer, {
           </View>
         </LinearGradient>
 
+        <View style={styles.settingsCard}>
+          <Text style={styles.panelLabel}>AI SERVER SETTINGS</Text>
+          <TextInput
+            style={styles.settingsInput}
+            value={serverUrl}
+            onChangeText={setServerUrl}
+            placeholder="http://192.168.56.1:8000"
+            placeholderTextColor="#64748b"
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        </View>
+
         <LinearGradient
           colors={["#101827", "#080d1d"]}
           style={[styles.guidancePanel, { borderColor: guidanceColor }]}
@@ -393,7 +406,7 @@ Speech.speak(answer, {
         </LinearGradient>
 
         <View style={styles.radarPanel}>
-          <Text style={styles.panelLabel}>SPATIAL RADAR</Text>
+          <Text style={styles.panelLabel}>SPATIAL RADAR & PATH FINDING</Text>
 
           <View style={styles.radarWrap}>
             <Animated.View style={{ transform: [{ rotate: spin }] }}>
@@ -413,6 +426,14 @@ Speech.speak(answer, {
             <View style={[styles.radarPoint, styles.centerPoint, center < 1200 && styles.hotPoint]} />
             <View style={[styles.radarPoint, styles.rightPoint, right < 1200 && styles.hotPoint]} />
           </View>
+
+          {/* Embedded SLAM grid & A* visualizer */}
+          <WebView
+            source={{ uri: `${serverUrl}/map` }}
+            style={styles.webView}
+            javaScriptEnabled={true}
+            domStorageEnabled={true}
+          />
         </View>
 
         <Animated.View style={{ transform: [{ scale: recording ? pulseAnim : 1 }] }}>
@@ -917,5 +938,31 @@ const styles = StyleSheet.create({
     color: "#f8fafc",
     fontSize: 14,
     lineHeight: 20,
+  },
+  settingsCard: {
+    backgroundColor: "rgba(15,23,42,0.84)",
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+  },
+  settingsInput: {
+    backgroundColor: "#1e293b",
+    borderRadius: 12,
+    padding: 10,
+    color: "#f8fafc",
+    fontSize: 14,
+    borderWidth: 1,
+    borderColor: "#334155",
+  },
+  webView: {
+    width: "100%",
+    height: 350,
+    marginTop: 15,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e3a8a",
+    overflow: "hidden",
   },
 });
