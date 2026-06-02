@@ -42,7 +42,7 @@ const RECORDING_OPTIONS = {
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://192.168.45.5:8000");
+  const [serverUrl, setServerUrl] = useState("http://192.168.45.150:8000");
   const [data, setData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
@@ -1034,7 +1034,7 @@ const styles = StyleSheet.create({
     borderColor: "#334155",
   },
   webView: {
-    width: "100%",
+    alignSelf: "stretch",
     height: 350,
     marginTop: 15,
     borderRadius: 12,
