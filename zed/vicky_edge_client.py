@@ -302,6 +302,7 @@ class VickyEdgeApp:
         # Smartphone IMU state variables for thread-safety and dead reckoning
         self.latest_imu_data: Optional[Dict[str, Any]] = None
         self.imu_lock = threading.Lock()
+        self.imu_packet_count: int = 0
         
         self.fallback_active: bool = False
         self.dr_x: float = 0.0
@@ -348,6 +349,9 @@ class VickyEdgeApp:
                                         "yaw": float(data.get("rotation_rpy", {}).get("yaw", 0.0))
                                     }
                                 }
+                            self.imu_packet_count += 1
+                            if self.imu_packet_count % 100 == 0:
+                                print(f"[EDGE SERVER] Transceived {self.imu_packet_count} IMU packets from smartphone. Status: CONNECTIVITY OK.")
                     except Exception as e:
                         pass
             except Exception:

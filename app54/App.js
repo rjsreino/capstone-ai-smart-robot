@@ -513,7 +513,11 @@ export default function App() {
             <View style={[styles.radarPoint, styles.rightPoint, right < 1200 && styles.hotPoint]} />
           </View>
 
-          {/* Embedded SLAM grid & A* visualizer */}
+        </View>
+
+        {/* Embedded SLAM grid & A* visualizer */}
+        <View style={styles.mapCard}>
+          <Text style={styles.panelLabel}>LIVE SLAM OCCUPANCY MAP</Text>
           <View style={styles.webViewContainer}>
             <WebView
               source={{ uri: `${serverUrl}/map` }}
@@ -1055,5 +1059,13 @@ const styles = StyleSheet.create({
   },
   webView: {
     flex: 1,
+  },
+  mapCard: {
+    backgroundColor: "#070b1f",
+    borderRadius: 30,
+    padding: 20,
+    marginBottom: 18,
+    borderWidth: 1,
+    borderColor: "#1e3a8a",
   },
 });
