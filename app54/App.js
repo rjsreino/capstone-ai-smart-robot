@@ -11,6 +11,7 @@ import {
   Text,
   TextInput,
   View,
+  Platform,
 } from "react-native";
 
 import * as Speech from "expo-speech";
@@ -97,10 +98,18 @@ export default function App() {
     let subscription = null;
     const startSensors = async () => {
       try {
-        const { status } = await DeviceMotion.requestPermissionsAsync();
-        if (status !== 'granted') {
-          console.log("[Sensors] DeviceMotion permission not granted");
+        const isAvailable = await DeviceMotion.isAvailableAsync();
+        if (!isAvailable) {
+          console.log("[Sensors] DeviceMotion is not available on this device");
           return;
+        }
+
+        if (Platform.OS === 'ios') {
+          const { status } = await DeviceMotion.requestPermissionsAsync();
+          if (status !== 'granted') {
+            console.log("[Sensors] DeviceMotion permission not granted on iOS");
+            return;
+          }
         }
 
         DeviceMotion.setUpdateInterval(20);
@@ -505,12 +514,14 @@ export default function App() {
           </View>
 
           {/* Embedded SLAM grid & A* visualizer */}
-          <WebView
-            source={{ uri: `${serverUrl}/map` }}
-            style={styles.webView}
-            javaScriptEnabled={true}
-            domStorageEnabled={true}
-          />
+          <View style={styles.webViewContainer}>
+            <WebView
+              source={{ uri: `${serverUrl}/map` }}
+              style={styles.webView}
+              javaScriptEnabled={true}
+              domStorageEnabled={true}
+            />
+          </View>
         </View>
 
         <Animated.View style={{ transform: [{ scale: recording ? pulseAnim : 1 }] }}>
@@ -1033,7 +1044,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#334155",
   },
-  webView: {
+  webViewContainer: {
     alignSelf: "stretch",
     height: 350,
     marginTop: 15,
@@ -1041,5 +1052,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#1e3a8a",
     overflow: "hidden",
+  },
+  webView: {
+    flex: 1,
   },
 });
