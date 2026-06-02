@@ -15,6 +15,7 @@ import {
 
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
+import { DeviceMotion } from "expo-sensors";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle, Line, Polygon } from "react-native-svg";
 import { WebView } from "react-native-webview";
@@ -61,6 +62,82 @@ export default function App() {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const scanAnim = useRef(new Animated.Value(0)).current;
   const rotateAnim = useRef(new Animated.Value(0)).current;
+
+  const wsRef = useRef(null);
+
+  useEffect(() => {
+    let ip = "127.0.0.1";
+    try {
+      const match = serverUrl.match(/\/\/([^:]+)/);
+      if (match && match[1]) {
+        ip = match[1];
+      }
+    } catch (err) {
+      console.log("Failed to parse IP from serverUrl:", err);
+    }
+
+    const wsUrl = `ws://${ip}:8005`;
+    console.log("[IMU WS] Connecting to:", wsUrl);
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      console.log("[IMU WS] Connected successfully to edge node.");
+    };
+
+    ws.onerror = (e) => {
+      console.log("[IMU WS] Error:", e.message);
+    };
+
+    ws.onclose = () => {
+      console.log("[IMU WS] Closed.");
+    };
+
+    let subscription = null;
+    const startSensors = async () => {
+      try {
+        const { status } = await DeviceMotion.requestPermissionsAsync();
+        if (status !== 'granted') {
+          console.log("[Sensors] DeviceMotion permission not granted");
+          return;
+        }
+
+        DeviceMotion.setUpdateInterval(20);
+
+        subscription = DeviceMotion.addListener((motionData) => {
+          if (!motionData) return;
+
+          const accel = motionData.acceleration || { x: 0, y: 0, z: 0 };
+          const rot = motionData.rotation || { alpha: 0, beta: 0, gamma: 0 };
+
+          const payload = {
+            packet_type: "SMARTPHONE_IMU_STREAM",
+            timestamp: Date.now() / 1000,
+            linear_accel: { x: accel.x, y: accel.y, z: accel.z },
+            rotation_rpy: { roll: rot.alpha, pitch: rot.beta, yaw: rot.gamma }
+          };
+
+          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(payload));
+          }
+        });
+      } catch (err) {
+        console.log("[Sensors] Error:", err);
+      }
+    };
+
+    startSensors();
+
+    return () => {
+      if (subscription) {
+        subscription.remove();
+      }
+      if (ws) {
+        ws.close();
+      }
+    };
+  }, [serverUrl]);
 
   useEffect(() => {
     guidanceEnabledRef.current = guidanceEnabled;

@@ -683,9 +683,9 @@ def vision_loop():
                     depth_distance = float(depth_val_mm) / 1000.0  # mm to meters
 
                 if depth_distance is not None:
-                    # Project object onto 2D grid coordinates
+                    # Project object onto 2D grid coordinates (invert sign to fix mirroring)
                     angle_rad = -fov_rad/2.0 + center_x * (fov_rad / w)
-                    x_c = depth_distance * np.sin(angle_rad)
+                    x_c = -depth_distance * np.sin(angle_rad)
                     z_c = depth_distance * np.cos(angle_rad)
                     x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
                     z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
@@ -767,8 +767,9 @@ def vision_loop():
                             if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
                                 depth_m = float(depth_val_mm) / 1000.0
                                 
+                                # Invert sign to fix mirroring
                                 angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
-                                x_c = depth_m * np.sin(angle_rad)
+                                x_c = -depth_m * np.sin(angle_rad)
                                 z_c = depth_m * np.cos(angle_rad)
                                 x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
                                 z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
@@ -813,8 +814,9 @@ def vision_loop():
                             if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
                                 depth_m = float(depth_val_mm) / 1000.0
                                 
+                                # Invert sign to fix mirroring
                                 angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
-                                x_c = depth_m * np.sin(angle_rad)
+                                x_c = -depth_m * np.sin(angle_rad)
                                 z_c = depth_m * np.cos(angle_rad)
                                 x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
                                 z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)

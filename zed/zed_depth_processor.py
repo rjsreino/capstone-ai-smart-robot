@@ -63,6 +63,7 @@ class ZedDepthProcessor:
         self.pitch = 0.0
         self.yaw = 0.0
         self.positional_tracking_enabled = False
+        self.is_tracking_ok = False
         self.occupancy_grid = np.zeros((100, 100), dtype=np.int8)
         
     def start(self):
@@ -189,11 +190,13 @@ class ZedDepthProcessor:
             self.last_frame_time = time.time()
             
             # Retrieve camera position relative to World frame
+            self.is_tracking_ok = False
             if self.positional_tracking_enabled:
                 try:
                     camera_pose = sl.Pose()
                     state = self.zed.get_position(camera_pose, sl.REFERENCE_FRAME.WORLD)
-                    if state == sl.POSITIONAL_TRACKING_STATE.OK:
+                    self.is_tracking_ok = (state == sl.POSITIONAL_TRACKING_STATE.OK)
+                    if self.is_tracking_ok:
                         translation = camera_pose.get_translation().get()
                         self.tx = float(translation[0])
                         self.ty = float(translation[1])
@@ -340,8 +343,8 @@ class ZedDepthProcessor:
                     
                 d_m = d_mm / 1000.0
                 
-                # Point in camera coordinates
-                x_c = d_m * np.sin(col_angle)
+                # Point in camera coordinates (invert sign to fix mirroring)
+                x_c = -d_m * np.sin(col_angle)
                 y_c = d_m * np.sin(row_angle)
                 z_c = d_m * np.cos(col_angle) * np.cos(row_angle)
                 
@@ -375,8 +378,8 @@ class ZedDepthProcessor:
                 # Mark obstacle cell
                 self.occupancy_grid[grid_z, grid_x] = 1
             else:
-                # No obstacle in this direction: clear path up to clearing limit
-                x_c = d_clear_limit * np.sin(col_angle)
+                # No obstacle in this direction: clear path up to clearing limit (invert sign to fix mirroring)
+                x_c = -d_clear_limit * np.sin(col_angle)
                 z_c = d_clear_limit * np.cos(col_angle)
                 clear_x = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
                 clear_z = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)

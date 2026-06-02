@@ -125,17 +125,19 @@ class EdgeSensorPipeline:
         if self.use_simulator:
             print("[CLIENT] Sensor Pipeline running in SIMULATION mode.")
 
-    def grab_frame(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[Dict[str, Any]]]:
+    def grab_frame(self) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[Dict[str, Any]], bool]:
         """
         Grabs active frame. Returns:
         - RGB Frame (np.ndarray)
         - Depth Frame (np.ndarray in mm)
         - SLAM Pose dictionary
+        - Tracking OK status (bool)
         """
         if not self.use_simulator and self.processor is not None:
             if self.processor.grab_frame():
                 rgb = self.processor.get_rgb_frame()
                 depth = self.processor.get_depth_frame()
+                tracking_ok = getattr(self.processor, "is_tracking_ok", False)
                 pose = {
                     "position_meters": {
                         "x": float(self.processor.tx) if hasattr(self.processor, "tx") else 0.0,
@@ -148,10 +150,10 @@ class EdgeSensorPipeline:
                         "yaw": float(self.processor.yaw) if hasattr(self.processor, "yaw") else 0.0
                     }
                 }
-                return rgb, depth, pose
+                return rgb, depth, pose, tracking_ok
             else:
                 time.sleep(0.01)
-                return None, None, None
+                return None, None, None, False
         else:
             # Generate simulated walk data and obstacle mapping
             time.sleep(0.067)  # simulate 15 FPS camera loop delay
@@ -191,7 +193,10 @@ class EdgeSensorPipeline:
                 x1, x2 = max(0, c_x - radius), min(672, c_x + radius)
                 depth[y1:y2, x1:x2] = float(obs_z)
                 
-            return rgb, depth, pose
+            # Simulate visual tracking drops periodically (drops for 5s every 20s)
+            tracking_ok = (int(self.sim_t) % 20 < 15)
+            
+            return rgb, depth, pose, tracking_ok
 
     def stop(self) -> None:
         if self.processor is not None:
@@ -294,6 +299,22 @@ class VickyEdgeApp:
         self.alert_thread = threading.Thread(target=self._safety_click_alert_worker, daemon=True)
         self.current_center_clearance: float = 5000.0
         
+        # Smartphone IMU state variables for thread-safety and dead reckoning
+        self.latest_imu_data: Optional[Dict[str, Any]] = None
+        self.imu_lock = threading.Lock()
+        
+        self.fallback_active: bool = False
+        self.dr_x: float = 0.0
+        self.dr_y: float = 0.0
+        self.dr_z: float = 0.0
+        self.dr_vx: float = 0.0
+        self.dr_vz: float = 0.0
+        self.last_imu_time: float = time.time()
+        self.last_valid_pose: Dict[str, Any] = {
+            "position_meters": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "rotation_degrees": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+        }
+        
         # Local Wi-Fi Smartphone Loop Server
         self.smartphone_clients: Set[websockets.WebSocketServerProtocol] = set()
         self.phone_server_thread = threading.Thread(target=self._start_smartphone_server, daemon=True)
@@ -308,8 +329,27 @@ class VickyEdgeApp:
             print("[EDGE SERVER] Smartphone audio transceiver linked.")
             self.smartphone_clients.add(websocket)
             try:
-                while True:
-                    await asyncio.sleep(1)
+                async for message in websocket:
+                    try:
+                        data_str = message.decode("utf-8") if isinstance(message, bytes) else message
+                        data = json.loads(data_str)
+                        if data.get("packet_type") == "SMARTPHONE_IMU_STREAM":
+                            with self.imu_lock:
+                                self.latest_imu_data = {
+                                    "timestamp": float(data.get("timestamp", time.time())),
+                                    "linear_accel": {
+                                        "x": float(data.get("linear_accel", {}).get("x", 0.0)),
+                                        "y": float(data.get("linear_accel", {}).get("y", 0.0)),
+                                        "z": float(data.get("linear_accel", {}).get("z", 0.0))
+                                    },
+                                    "rotation_rpy": {
+                                        "roll": float(data.get("rotation_rpy", {}).get("roll", 0.0)),
+                                        "pitch": float(data.get("rotation_rpy", {}).get("pitch", 0.0)),
+                                        "yaw": float(data.get("rotation_rpy", {}).get("yaw", 0.0))
+                                    }
+                                }
+                    except Exception as e:
+                        pass
             except Exception:
                 pass
             finally:
@@ -317,11 +357,13 @@ class VickyEdgeApp:
                     self.smartphone_clients.remove(websocket)
                 print("[EDGE SERVER] Smartphone audio transceiver unlinked.")
                 
+        async def main_server():
+            async with websockets.serve(handler, "0.0.0.0", 8005):
+                print("[EDGE SERVER] Local smartphone WebSocket server listening on port 8005.")
+                await asyncio.Future() # keep serving forever
+                
         try:
-            start_server = websockets.serve(handler, "0.0.0.0", 8005)
-            loop.run_until_complete(start_server)
-            print("[EDGE SERVER] Local smartphone WebSocket server listening on port 8005.")
-            loop.run_forever()
+            loop.run_until_complete(main_server())
         except Exception as e:
             print(f"[EDGE SERVER WARNING] Failed to start smartphone WebSocket server on port 8005: {e}")
 
@@ -413,17 +455,90 @@ class VickyEdgeApp:
         while self.running:
             self.loop_count += 1
             start_time: float = time.time()
-            rgb, depth, pose = self.sensor.grab_frame()
+            rgb, depth, pose, tracking_ok = self.sensor.grab_frame()
             
             if rgb is None or depth is None or pose is None:
                 await asyncio.sleep(0.01)
                 continue
+                
+            current_time = time.time()
+            if tracking_ok:
+                # Primary spatial map baseline
+                self.fallback_active = False
+                self.last_valid_pose = pose
+                self.last_imu_time = current_time
+            else:
+                # Initialize fallback tracking protocol when tracking drops
+                if not self.fallback_active:
+                    self.fallback_active = True
+                    self.dr_x = self.last_valid_pose["position_meters"]["x"]
+                    self.dr_y = self.last_valid_pose["position_meters"]["y"]
+                    self.dr_z = self.last_valid_pose["position_meters"]["z"]
+                    self.dr_vx = 0.0
+                    self.dr_vz = 0.0
+                    self.last_imu_time = current_time
+                    
+                # Integrate the incoming smartphone linear acceleration metrics over time
+                dt = current_time - self.last_imu_time
+                self.last_imu_time = current_time
+                
+                # Fetch latest smartphone IMU
+                with self.imu_lock:
+                    imu = self.latest_imu_data
+                    
+                ax_world = 0.0
+                az_world = 0.0
+                roll_deg = self.last_valid_pose["rotation_degrees"]["roll"]
+                pitch_deg = self.last_valid_pose["rotation_degrees"]["pitch"]
+                yaw_deg = self.last_valid_pose["rotation_degrees"]["yaw"]
+                
+                if imu is not None:
+                    accel = imu.get("linear_accel", {})
+                    rot = imu.get("rotation_rpy", {})
+                    
+                    ax_local = float(accel.get("x", 0.0))
+                    ay_local = float(accel.get("y", 0.0))
+                    az_local = float(accel.get("z", 0.0))
+                    
+                    roll_rad = float(rot.get("roll", 0.0))
+                    pitch_rad = float(rot.get("pitch", 0.0))
+                    yaw_rad = float(rot.get("yaw", 0.0))
+                    
+                    # Convert to degrees for payload
+                    roll_deg = float(np.degrees(roll_rad))
+                    pitch_deg = float(np.degrees(pitch_rad))
+                    yaw_deg = float(np.degrees(yaw_rad))
+                    
+                    # 2D projection along the yaw heading with pitch/roll correction
+                    a_forward_h = ay_local * np.cos(pitch_rad) - az_local * np.sin(pitch_rad)
+                    a_lateral_h = ax_local * np.cos(roll_rad) + az_local * np.sin(roll_rad)
+                    
+                    # Rotate horizontally to world coordinates
+                    ax_world = a_lateral_h * np.cos(yaw_rad) + a_forward_h * np.sin(yaw_rad)
+                    az_world = -a_lateral_h * np.sin(yaw_rad) + a_forward_h * np.cos(yaw_rad)
+                
+                # Double integration with damping (0.95 velocity dampening factor)
+                self.dr_vx = (self.dr_vx + ax_world * dt) * 0.95
+                self.dr_vz = (self.dr_vz + az_world * dt) * 0.95
+                
+                self.dr_x += self.dr_vx * dt
+                self.dr_z += self.dr_vz * dt
+                
+                # Override the SLAM baseline
+                pose = {
+                    "position_meters": {"x": self.dr_x, "y": self.dr_y, "z": self.dr_z},
+                    "rotation_degrees": {"roll": roll_deg, "pitch": pitch_deg, "yaw": yaw_deg}
+                }
                 
             zones: Dict[str, Any] = process_safety_corridors(depth)
             
             inference_ms: float = 0.0
             objects: List[Dict[str, Any]] = []
             audio_text_guidance: str = ""
+            
+            # Get latest IMU state under lock to avoid race condition during payload creation
+            with self.imu_lock:
+                current_imu = self.latest_imu_data
             
             # ----------------------------------------------------
             # COMPUTE MODE 1: LOCAL ALL-IN-ONE
@@ -472,7 +587,8 @@ class VickyEdgeApp:
                                 "network_rtt_ms": 0.0,
                                 "total_srt_ms": total_delay_ms,
                                 "hallucination_flag": False
-                            }
+                            },
+                            "smartphone_imu": current_imu
                         }
                         await self.websocket_telemetry.send(json.dumps(payload))
                     except Exception:
@@ -509,7 +625,8 @@ class VickyEdgeApp:
                                 "network_rtt_ms": 15.0, # assumed default
                                 "total_srt_ms": 0.0,
                                 "hallucination_flag": False
-                            }
+                            },
+                            "smartphone_imu": current_imu
                         }
                         
                         # Send binary frame to HUD video stream endpoint
@@ -578,7 +695,8 @@ class VickyEdgeApp:
                                 "network_rtt_ms": 15.0,
                                 "total_srt_ms": (time.time() - start_time) * 1000.0,
                                 "hallucination_flag": False
-                            }
+                            },
+                            "smartphone_imu": current_imu
                         }
                         await self.websocket_telemetry.send(json.dumps(payload))
                     except Exception:
