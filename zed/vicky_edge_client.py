@@ -284,6 +284,11 @@ def run_local_bounding_box_pipeline(rgb: np.ndarray, depth: np.ndarray) -> List[
                     
             lateral_offset_meters: float = ((cx - (w / 2.0)) / (w / 2.0)) * depth_meters * 0.5
             
+            # Draw bounding box and label on image for local/remote HUD stream
+            cv2.rectangle(rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(rgb, f"{class_name} {depth_meters:.1f}m", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+
             objects.append({
                 "tracking_id": idx,
                 "class": class_name,
@@ -693,12 +698,35 @@ class VickyEdgeApp:
                     
                 await asyncio.sleep(0.01)
                 
+            # ----------------------------------------------------
+            # VISUALIZATION POPUP (HUD)
+            # ----------------------------------------------------
+            # Colorize depth map (min=400mm, max=5000mm)
+            depth_normalized = np.clip(depth, 400.0, 5000.0)
+            depth_normalized = ((depth_normalized - 400.0) / (5000.0 - 400.0) * 255.0).astype(np.uint8)
+            depth_colored = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_TURBO)
+            
+            # Combine RGB and Depth side-by-side
+            composite = np.hstack((rgb, depth_colored))
+            
+            # Overlay active guidance text on composite frame
+            overlay_text = f"CMD: {zones['escape_vector']} | C-CLEAR: {zones['center_clearance_mm']:.0f}mm"
+            cv2.putText(composite, overlay_text, (15, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            cv2.putText(composite, f"SYS: {tracking_source}", (15, 60),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+            
+            # Show live window
+            cv2.imshow("VICKY Client Live HUD Simulation", composite)
+            cv2.waitKey(1)
+            
             await asyncio.sleep(0.01)
 
     def stop_pipeline(self) -> None:
         self.running = False
         self.sensor.stop()
         pygame.mixer.quit()
+        cv2.destroyAllWindows()
 
 def main() -> None:
     app = VickyEdgeApp()
