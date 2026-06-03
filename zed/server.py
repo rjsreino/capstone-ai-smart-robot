@@ -75,29 +75,6 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     await db_logger.start()
-    
-    # Initialize simulated obstacles on the occupancy grid so that
-    # the A* path planning has objects to route around in simulation mode.
-    # We populate some default obstacles (borders + pillars) on startup.
-    for r in range(100):
-        for c in range(100):
-            if r == 0 or r == 99 or c == 0 or c == 99:
-                zva.occupancy_grid[r][c] = 1
-                
-    # Center pillar obstacle
-    for r in range(40, 50):
-        for c in range(45, 55):
-            zva.occupancy_grid[r][c] = 1
-            
-    # Lower-left pillar obstacle
-    for r in range(65, 75):
-        for c in range(20, 30):
-            zva.occupancy_grid[r][c] = 1
-
-    # Upper-right pillar obstacle
-    for r in range(25, 35):
-        for c in range(70, 80):
-            zva.occupancy_grid[r][c] = 1
 
 @app.on_event("shutdown")
 async def shutdown_event():

@@ -511,57 +511,8 @@ class VickyEdgeApp:
                 await asyncio.sleep(0.01)
                 continue
                 
-            current_time = time.time()
-            if tracking_ok and not FORCE_IMU_FALLBACK:
-                # Primary spatial map baseline
-                raw_x = pose["position_meters"]["x"]
-                raw_y = pose["position_meters"]["y"]
-                raw_z = pose["position_meters"]["z"]
-                
-                with self.imu_lock:
-                    if self.fallback_active:
-                        # Transitioning back to VSLAM from Fallback!
-                        # Calculate the offset to align VSLAM cleanly with our current PDR position
-                        self.offset_x = self.dr_x - raw_x
-                        self.offset_y = self.dr_y - raw_y
-                        self.offset_z = self.dr_z - raw_z
-                        self.fallback_active = False
-                        print(f"[POSE ALIGN] Recovered VSLAM! Offset X={self.offset_x:.2f}, Z={self.offset_z:.2f}")
-                        
-                    # Apply offsets to pose
-                    pose["position_meters"]["x"] = raw_x + self.offset_x
-                    pose["position_meters"]["y"] = raw_y + self.offset_y
-                    pose["position_meters"]["z"] = raw_z + self.offset_z
-                    self.last_valid_pose = pose
-            else:
-                # Initialize fallback tracking protocol when tracking drops
-                with self.imu_lock:
-                    if not self.fallback_active:
-                        self.fallback_active = True
-                        self.dr_x = self.last_valid_pose["position_meters"]["x"]
-                        self.dr_y = self.last_valid_pose["position_meters"]["y"]
-                        self.dr_z = self.last_valid_pose["position_meters"]["z"]
-                    
-                    dr_x_val = self.dr_x
-                    dr_y_val = self.dr_y
-                    dr_z_val = self.dr_z
-                    imu = self.latest_imu_data
-                
-                roll_deg = self.last_valid_pose["rotation_degrees"]["roll"]
-                pitch_deg = self.last_valid_pose["rotation_degrees"]["pitch"]
-                yaw_deg = self.last_valid_pose["rotation_degrees"]["yaw"]
-                
-                if imu is not None:
-                    rot = imu.get("rotation_rpy", {})
-                    roll_deg = float(np.degrees(float(rot.get("roll", 0.0))))
-                    pitch_deg = float(np.degrees(float(rot.get("pitch", 0.0))))
-                    yaw_deg = float(np.degrees(float(rot.get("yaw", 0.0))))
-                
-                # Override the SLAM baseline
-                pose = {
-                    "position_meters": {"x": dr_x_val, "y": dr_y_val, "z": dr_z_val},
-                    "rotation_degrees": {"roll": roll_deg, "pitch": pitch_deg, "yaw": yaw_deg}
-                }
+            # Direct ZED VSLAM positional tracking (no IMU dead-reckoning overrides/offsets)
+            self.last_valid_pose = pose
                 
             zones: Dict[str, Any] = process_safety_corridors(depth)
             
@@ -596,7 +547,7 @@ class VickyEdgeApp:
                 # Broadcast local text guidance to Wi-Fi loop Smartphone clients
                 await self.broadcast_to_smartphone(audio_text_guidance)
                 
-                tracking_source = "FALLBACK_IMU" if self.fallback_active else "VSLAM"
+                tracking_source = "VSLAM" if tracking_ok else "LOST"
                 total_delay_ms: float = (time.time() - start_time) * 1000.0
                 print(f"[HUD LOCAL] [{tracking_source}] SRT: {total_delay_ms:.1f}ms | Latency: {inference_ms:.1f}ms | Zones (C): {zones['center_clearance_mm']:.0f}mm | Guidance: {audio_text_guidance}")
                 
