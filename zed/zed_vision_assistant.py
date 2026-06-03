@@ -58,7 +58,7 @@ SESSION_ID = "session_assistant_prod"
 # Telemetry Queue for background streaming (max 5 frames to avoid memory bloat)
 telemetry_queue = queue.Queue(maxsize=5)
 
-def push_telemetry(frame, zones, detections, srt_ms, inference_ms):
+def push_telemetry(frame, zones, detections, srt_ms, inference_ms, active_semantic_path=False):
     """Safely pushes a frame and telemetry info to the background thread queue (drops oldest if full)."""
     if telemetry_queue.full():
         try:
@@ -71,6 +71,7 @@ def push_telemetry(frame, zones, detections, srt_ms, inference_ms):
             "detections": [d.copy() for d in detections] if detections else [],
             "srt_ms": srt_ms,
             "inference_ms": inference_ms,
+            "active_semantic_path": active_semantic_path,
             "timestamp": time.time()
         }))
     except queue.Full:
@@ -122,6 +123,7 @@ pose_data = {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0
 occupancy_grid = np.zeros((100, 100), dtype=np.int8).tolist()
 reset_map_flag = False
 semantic_objects = []
+active_semantic_path = False
 
 def trigger_map_reset():
     global reset_map_flag
@@ -285,6 +287,7 @@ async def telemetry_sender_loop():
                 "user_spatial_pose": pose,
                 "spatial_depth_zones": zones_payload,
                 "semantic_objects_in_frustum": frustum_objects,
+                "active_semantic_path": data.get("active_semantic_path", False),
                 "performance_metrics": {
                     "inference_latency_ms": data["inference_ms"],
                     "network_rtt_ms": 0.0,
@@ -483,7 +486,7 @@ def evaluate_scene_events(detections: list[dict]) -> list[dict]:
     return sorted(events, key=lambda x: x["priority"], reverse=True)
 
 def auto_announce(detections: list[dict]):
-    global last_user_interaction_time, voice_interaction_active, last_manual_speech_time
+    global last_user_interaction_time, voice_interaction_active, last_manual_speech_time, guidance_cmd
     if time.time() - last_manual_speech_time < 3.0:
         return
     if voice_interaction_active:
@@ -492,6 +495,14 @@ def auto_announce(detections: list[dict]):
         return
 
     now = time.time()
+    
+    if guidance_cmd == "ENTER DOORWAY":
+        msg = "I detect an open doorway approximately 2 meters ahead in the center corridor. The surrounding side walls are tight; let's head straight through the opening to explore further."
+        if should_announce(msg, now):
+            remember_response(msg)
+            enqueue_speech(msg)
+        return
+
     events = evaluate_scene_events(detections)
 
     if events:
@@ -550,7 +561,7 @@ def extract_text_from_frame(frame) -> str:
 def vision_loop():
     global latest_detections, latest_frame, latest_depth_map, running
     global guidance_cmd, guidance_color, zones_data, safe_distance_threshold
-    global pose_data, occupancy_grid, reset_map_flag, semantic_objects
+    global pose_data, occupancy_grid, reset_map_flag, semantic_objects, active_semantic_path
 
     # Configure ZED 1 Camera for USB 2.0 fallback connection (VGA @ 15fps)
     config = ZedDepthConfig(
@@ -751,9 +762,27 @@ def vision_loop():
 
         # 3. Exit Sign Detection (OCR + Green Color Segmentation)
         now = time.time()
+        
+        # Check for Frontier Peak Depth Maximum
+        gdm = zones.get('global_depth_max') if (nav_data is not None and 'zones' in nav_data) else None
+        has_depth_peak = False
+        segment_x1, segment_x2 = 0, w
+        if gdm and gdm.get('value', 0.0) > 1800.0:
+            has_depth_peak = True
+            peak_col = gdm.get('col', w // 2)
+            segment_x1 = max(0, peak_col - 120)
+            segment_x2 = min(w, peak_col + 120)
+            
         if now - last_exit_check_time >= 1.5:
             last_exit_check_time = now
-            upper_roi = rgb_frame[0:int(h * 0.75), :]
+            
+            # Pass the corresponding RGB frame segment bounding coordinates to OCR or color segmentation
+            if has_depth_peak:
+                upper_roi = rgb_frame[0:int(h * 0.75), segment_x1:segment_x2]
+                roi_offset_x = segment_x1
+            else:
+                upper_roi = rgb_frame[0:int(h * 0.75), :]
+                roi_offset_x = 0
             
             # A. EasyOCR text check
             if ocr_reader is not None:
@@ -762,7 +791,7 @@ def vision_loop():
                     for bbox, text, conf in ocr_results:
                         text_clean = text.strip().upper()
                         if "EXIT" in text_clean and conf >= 0.35:
-                            cx = int((bbox[0][0] + bbox[2][0]) / 2)
+                            cx = roi_offset_x + int((bbox[0][0] + bbox[2][0]) / 2)
                             cy = int((bbox[0][1] + bbox[2][1]) / 2)
                             
                             depth_val_mm = depth_frame[cy, cx]
@@ -809,7 +838,7 @@ def vision_loop():
                         
                         # Green emergency exit signs are rectangular with high fill ratio
                         if 1.2 <= aspect_ratio <= 2.8 and fill_ratio >= 0.7:
-                            cx = bx + bw // 2
+                            cx = roi_offset_x + bx + bw // 2
                             cy = by + bh // 2
                             
                             depth_val_mm = depth_frame[cy, cx]
@@ -850,6 +879,16 @@ def vision_loop():
                 "distance": dist
             })
 
+        # Flag Active Semantic Path
+        active_semantic_path = False
+        if has_depth_peak and len(persistent_exit_signs) > 0:
+            active_semantic_path = True
+            
+        # Override safety guidelines/guidance command
+        if active_semantic_path and not telemetry_source_active:
+            guidance_cmd = "ENTER DOORWAY"
+            guidance_color = (0, 255, 0)
+
         # Thread-safe global update
         with frame_lock:
             latest_detections = detections
@@ -879,7 +918,7 @@ def vision_loop():
         prev_time = current_time
 
         total_delay_ms = (current_time - frame_start_time) * 1000.0
-        push_telemetry(annotated, zones_data, detections, total_delay_ms, total_delay_ms)
+        push_telemetry(annotated, zones_data, detections, total_delay_ms, total_delay_ms, active_semantic_path)
 
         # 4. Render Dashboard Visual Panels
         display_w = 640

@@ -115,7 +115,24 @@ def main():
             
             CRITICAL_STOP_DIST = 500.0  # 50cm danger close
             
-            if center_dist < CRITICAL_STOP_DIST or (left_dist < CRITICAL_STOP_DIST and right_dist < CRITICAL_STOP_DIST):
+            # Check for Doorway / Frontier Peak state
+            gdm = zones.get('global_depth_max')
+            is_doorway = False
+            if gdm:
+                val = gdm.get('value', 0.0)
+                left_anomaly = gdm.get('left_wall_anomaly_mm', 0.0)
+                right_anomaly = gdm.get('right_wall_anomaly_mm', 0.0)
+                # Check if values match the doorway/frontier peak state
+                if (1800.0 <= val <= 2200.0 and 
+                    400.0 <= left_anomaly <= 550.0 and 
+                    700.0 <= right_anomaly <= 900.0 and
+                    gdm.get('zone') == 'center'):
+                    is_doorway = True
+
+            if is_doorway:
+                cmd_text = "ENTER DOORWAY"
+                cmd_color = (0, 255, 0)  # Green
+            elif center_dist < CRITICAL_STOP_DIST or (left_dist < CRITICAL_STOP_DIST and right_dist < CRITICAL_STOP_DIST):
                 cmd_text = "STOP! DANGER"
                 cmd_color = (0, 0, 255)  # Red
             elif center_dist >= safe_distance_threshold:

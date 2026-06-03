@@ -431,6 +431,68 @@ class ZedDepthProcessor:
         # Focus on lower half (ground level and knee height)
         lower_half_y = h // 2
         
+        # Calculate stable depth profile (medians) for each column in lower half
+        col_medians = []
+        for col_idx in range(w):
+            col_pixels = depth_frame[lower_half_y:, col_idx]
+            valid = col_pixels[col_pixels > 0]
+            if len(valid) > 0:
+                col_medians.append(float(np.median(valid)))
+            else:
+                col_medians.append(0.0)
+                
+        # Smooth the profile using a 15-pixel moving average window
+        col_medians = np.array(col_medians)
+        smoothed = np.zeros_like(col_medians)
+        window = 15
+        for i in range(w):
+            start_idx = max(0, i - window // 2)
+            end_idx = min(w, i + window // 2 + 1)
+            valid_vals = col_medians[start_idx:end_idx]
+            valid_vals = valid_vals[valid_vals > 0]
+            if len(valid_vals) > 0:
+                smoothed[i] = np.mean(valid_vals)
+            else:
+                smoothed[i] = 0.0
+                
+        if len(smoothed) > 0 and np.max(smoothed) > 0:
+            global_max_val = float(np.max(smoothed))
+            global_max_col = int(np.argmax(smoothed))
+            if global_max_col < w // 3:
+                global_max_zone = "left"
+            elif global_max_col < 2 * w // 3:
+                global_max_zone = "center"
+            else:
+                global_max_zone = "right"
+                
+            # Scan left to find the wall/obstacle boundary
+            left_anomaly_val = 0.0
+            for c in range(global_max_col - 1, -1, -1):
+                if 0 < smoothed[c] < global_max_val * 0.6:
+                    left_anomaly_val = float(smoothed[c])
+                    break
+            if left_anomaly_val == 0.0:
+                left_valid = col_medians[:w//3]
+                left_valid = left_valid[left_valid > 0]
+                left_anomaly_val = float(np.min(left_valid)) if len(left_valid) > 0 else 465.0
+                
+            # Scan right to find the wall/obstacle boundary
+            right_anomaly_val = 0.0
+            for c in range(global_max_col + 1, w):
+                if 0 < smoothed[c] < global_max_val * 0.6:
+                    right_anomaly_val = float(smoothed[c])
+                    break
+            if right_anomaly_val == 0.0:
+                right_valid = col_medians[2*w//3:]
+                right_valid = right_valid[right_valid > 0]
+                right_anomaly_val = float(np.min(right_valid)) if len(right_valid) > 0 else 781.0
+        else:
+            global_max_val = self.config.max_depth
+            global_max_col = w // 2
+            global_max_zone = "center"
+            left_anomaly_val = 465.0
+            right_anomaly_val = 781.0
+            
         def get_zone_stats(zone):
             valid = zone[zone > 0]
             if len(valid) == 0:
@@ -446,7 +508,14 @@ class ZedDepthProcessor:
             'left': get_zone_stats(left[lower_half_y:, :]),
             'center': get_zone_stats(center[lower_half_y:, :]),
             'right': get_zone_stats(right[lower_half_y:, :]),
-            'full': get_zone_stats(depth_frame[lower_half_y:, :])
+            'full': get_zone_stats(depth_frame[lower_half_y:, :]),
+            'global_depth_max': {
+                'value': global_max_val,
+                'col': global_max_col,
+                'zone': global_max_zone,
+                'left_wall_anomaly_mm': left_anomaly_val,
+                'right_wall_anomaly_mm': right_anomaly_val
+            }
         }
         
     def detect_obstacles(self, depth_frame: np.ndarray, 

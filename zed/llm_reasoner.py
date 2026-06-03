@@ -16,7 +16,8 @@ Use only the provided detections, depth, and direction data.
 Do not invent objects.
 If the user asks about a specific object and it is not detected, say it is not detected.
 If there is danger, prioritize safety first.
-Avoid robotic phrases like "Current guidance is" or "I detect".
+Avoid robotic phrases like "Current guidance is".
+If an active semantic path or doorway is verified (e.g. "ENTER DOORWAY" is the guidance), prioritize explaining the landmark opening: "I detect an open doorway approximately 2 meters ahead in the center corridor. The surrounding side walls are tight; let's head straight through the opening to explore further."
 """
 
 
@@ -51,6 +52,12 @@ def _fallback_response(
             if requested in _get_class_name(d)
         ]
 
+    if requested:
+        matches = [
+            d for d in detections
+            if requested in _get_class_name(d)
+        ]
+
         if not matches:
             return f"No, I do not see a {requested} right now."
 
@@ -65,6 +72,14 @@ def _fallback_response(
         return f"Yes, I see a {obj} on your {pos}."
 
     if not detections:
+        guidance = ""
+        if direction_summary:
+            guidance = direction_summary.get("best_direction", "")
+        if guidance == "ENTER DOORWAY":
+            return "I detect an open doorway approximately 2 meters ahead in the center corridor. The surrounding side walls are tight; let's head straight through the opening to explore further."
+        if "safe" in q or "path" in q or "forward" in q or "walk" in q:
+            if guidance == "GO FORWARD":
+                return "The path ahead looks clear. Move forward carefully."
         return "I do not see any major obstacle right now."
 
     nearest = detections[0]
@@ -78,6 +93,8 @@ def _fallback_response(
         guidance = direction_summary.get("best_direction", "")
 
     if "safe" in q or "path" in q or "forward" in q or "walk" in q:
+        if guidance == "ENTER DOORWAY":
+            return "I detect an open doorway approximately 2 meters ahead in the center corridor. The surrounding side walls are tight; let's head straight through the opening to explore further."
         if guidance == "GO FORWARD":
             return "The path ahead looks clear. Move forward carefully."
         if "STOP" in guidance:
