@@ -308,8 +308,13 @@ class EdgeSensorPipeline:
                     rw = size_pixels // 3
                     rh = size_pixels // 2
                     
-                x1_s, y1_s = max(0, sx - rw), max(0, sy - rh)
-                x2_s, y2_s = min(671, sx + rw), min(375, sy + rh)
+                x1_s = max(0, min(671, sx - rw))
+                x2_s = max(0, min(671, sx + rw))
+                y1_s = max(0, min(375, sy - rh))
+                y2_s = max(0, min(375, sy + rh))
+                
+                if x2_s <= x1_s or y2_s <= y1_s:
+                    continue
                 
                 color = obj["color"]
                 if obj["class"] == "person":
