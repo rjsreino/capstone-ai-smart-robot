@@ -114,6 +114,21 @@ class EdgeSensorPipeline:
         self.sim_pose_x: float = 0.0
         self.sim_pose_z: float = 0.0
         self.sim_yaw: float = 0.0
+        self.visible_sim_objects = []
+        
+        # List of simulated 3D world objects for the advanced spatial simulation
+        # world_x: lateral offset (-1m to 1m)
+        # world_z: absolute depth position (in meters)
+        # height: vertical height (y coordinate relative to camera, 0 = eye level)
+        # size: diameter of object in meters
+        self.sim_objects = [
+            {"class": "chair", "world_x": -0.5, "world_z": 6.0, "height": -0.3, "size": 0.4, "color": (0, 165, 255)}, # Orange chair
+            {"class": "person", "world_x": 0.3, "world_z": 10.0, "height": -0.1, "size": 0.5, "color": (255, 100, 100), "speed_z": -0.15}, # Person walking towards us
+            {"class": "bottle", "world_x": -0.3, "world_z": 4.0, "height": -0.4, "size": 0.15, "color": (0, 255, 255)}, # Yellow bottle on floor
+            {"class": "chair", "world_x": 0.6, "world_z": 14.0, "height": -0.3, "size": 0.4, "color": (0, 0, 255), "amplitude_x": 0.3, "freq_x": 1.2}, # Blue chair sliding left-right
+            {"class": "person", "world_x": -0.2, "world_z": 18.0, "height": -0.1, "size": 0.5, "color": (255, 50, 50), "speed_z": -0.1}, # Another person walking
+            {"class": "exit sign", "world_x": 0.0, "world_z": 12.0, "height": 0.7, "size": 0.6, "color": (0, 255, 0)} # Green Exit Sign
+        ]
         
         if not self.use_simulator:
             try:
@@ -170,8 +185,8 @@ class EdgeSensorPipeline:
             
             # Simulate forward path walking with slight periodic drift
             self.sim_pose_z += 0.05
-            self.sim_pose_x = 0.5 * np.sin(self.sim_t * 0.5)
-            self.sim_yaw = 5.0 * np.cos(self.sim_t * 0.5)
+            self.sim_pose_x = 0.4 * np.sin(self.sim_t * 0.4)
+            self.sim_yaw = 4.0 * np.cos(self.sim_t * 0.4)
             
             pose = {
                 "position_meters": {"x": self.sim_pose_x, "y": 0.0, "z": self.sim_pose_z},
@@ -182,27 +197,149 @@ class EdgeSensorPipeline:
             rgb = np.zeros((376, 672, 3), dtype=np.uint8)
             rgb[:] = [15, 12, 10]
             
-            cv2.line(rgb, (0, 376), (336, 188), (50, 50, 50), 2)
-            cv2.line(rgb, (672, 376), (336, 188), (50, 50, 50), 2)
+            f_x = 450.0
+            f_y = 450.0
+            cx = 336.0
+            cy = 188.0
             
+            # Draw hallway ribs (transverse rectangles) at 2-meter intervals
+            start_z_rib = int(self.sim_pose_z / 2) * 2
+            for i in range(12):
+                rib_z = start_z_rib + i * 2.0
+                dz = rib_z - self.sim_pose_z
+                if dz <= 0.2:
+                    continue
+                
+                # Corner points in world
+                # Left-bottom, Right-bottom, Right-top, Left-top
+                pts_w = [
+                    (-1.0, -0.8, rib_z),
+                    (1.0, -0.8, rib_z),
+                    (1.0, 0.8, rib_z),
+                    (-1.0, 0.8, rib_z)
+                ]
+                pts_s = []
+                for xw, yw, zw in pts_w:
+                    dx = xw - self.sim_pose_x
+                    dy = yw
+                    sx = int(cx + (dx * f_x) / dz)
+                    sy = int(cy - (dy * f_y) / dz)
+                    pts_s.append((sx, sy))
+                    
+                # Draw lines connecting the 4 corners of the rib
+                alpha = max(0.1, 1.0 - (dz / 20.0))
+                color_val = int(70 * alpha)
+                color = (color_val, color_val, color_val + 10)
+                
+                for j in range(4):
+                    p1 = pts_s[j]
+                    p2 = pts_s[(j + 1) % 4]
+                    if -1000 < p1[0] < 2000 and -1000 < p1[1] < 2000:
+                        cv2.line(rgb, p1, p2, color, 1)
+            
+            # Draw main longitudinal lines for wall/floor boundaries
+            long_lines = [
+                ((-1.0, -0.8), (-1.0, -0.8)), # bottom-left
+                ((1.0, -0.8), (1.0, -0.8)),   # bottom-right
+                ((-1.0, 0.8), (-1.0, 0.8)),   # top-left
+                ((1.0, 0.8), (1.0, 0.8))      # top-right
+            ]
+            for start_pt, end_pt in long_lines:
+                dz1 = 0.2
+                dz2 = 24.0
+                sx1 = int(cx + ((start_pt[0] - self.sim_pose_x) * f_x) / dz1)
+                sy1 = int(cy - (start_pt[1] * f_y) / dz1)
+                sx2 = int(cx + ((end_pt[0] - self.sim_pose_x) * f_x) / dz2)
+                sy2 = int(cy - (end_pt[1] * f_y) / dz2)
+                cv2.line(rgb, (sx1, sy1), (sx2, sy2), (50, 50, 55), 1)
+
+            # Initialize depth map
             depth = np.zeros((376, 672), dtype=np.float32)
             for r in range(376):
                 depth[r, :] = max(400.0, 5000.0 - (r * 12.0))
                 
-            obs_z: int = 2500 - (100 * (int(self.sim_t) % 20))
-            if obs_z > 400:
-                c_x: int = int(336 + 100 * np.sin(self.sim_t))
-                c_y: int = 220
-                radius: int = int(50000 / obs_z)
-                cv2.circle(rgb, (c_x, c_y), radius, (0, 0, 255), -1)
-                cv2.putText(rgb, "Chair", (c_x - 15, c_y - radius - 5), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255,255,255), 1)
+            # Process and draw 3D objects (Painter's algorithm: far-to-near sorting)
+            self.visible_sim_objects = []
+            
+            # Update world positions and handle scroller loops
+            for obj in self.sim_objects:
+                if self.sim_pose_z > obj["world_z"] + 1.0:
+                    obj["world_z"] = self.sim_pose_z + 18.0 + random.uniform(-2.0, 4.0)
+                    obj["world_x"] = random.uniform(-0.8, 0.8)
+                    
+                current_world_x = obj["world_x"]
+                current_world_z = obj["world_z"]
                 
-                y1, y2 = max(0, c_y - radius), min(376, c_y + radius)
-                x1, x2 = max(0, c_x - radius), min(672, c_x + radius)
-                depth[y1:y2, x1:x2] = float(obs_z)
+                if "speed_z" in obj:
+                    obj["world_z"] += obj["speed_z"] * 0.067
+                    if obj["world_z"] < self.sim_pose_z - 1.0:
+                        obj["world_z"] = self.sim_pose_z + 18.0
+                        obj["world_x"] = random.uniform(-0.8, 0.8)
                 
-            # Simulate visual tracking drops periodically (drops for 5s every 20s)
+                if "amplitude_x" in obj:
+                    current_world_x = obj["world_x"] + obj["amplitude_x"] * np.sin(self.sim_t * obj["freq_x"])
+                    
+                obj["_current_x"] = current_world_x
+                obj["_current_z"] = current_world_z
+                
+            sorted_objects = sorted(self.sim_objects, key=lambda o: o["_current_z"], reverse=True)
+            
+            for obj in sorted_objects:
+                dx = obj["_current_x"] - self.sim_pose_x
+                dz = obj["_current_z"] - self.sim_pose_z
+                dy = obj["height"]
+                
+                if dz <= 0.3 or dz > 22.0:
+                    continue
+                    
+                sx = int(cx + (dx * f_x) / dz)
+                sy = int(cy - (dy * f_y) / dz)
+                
+                size_pixels = int((obj["size"] * f_x) / dz)
+                if size_pixels < 2:
+                    continue
+                    
+                rw = size_pixels // 2
+                rh = size_pixels
+                if obj["class"] == "exit sign":
+                    rh = size_pixels // 3
+                    rw = int(size_pixels * 0.7)
+                elif obj["class"] == "bottle":
+                    rw = size_pixels // 3
+                    rh = size_pixels // 2
+                    
+                x1_s, y1_s = max(0, sx - rw), max(0, sy - rh)
+                x2_s, y2_s = min(671, sx + rw), min(375, sy + rh)
+                
+                color = obj["color"]
+                if obj["class"] == "person":
+                    cv2.rectangle(rgb, (x1_s, y1_s), (x2_s, y2_s), color, -1)
+                    hw = (x2_s - x1_s) // 3
+                    cv2.circle(rgb, (sx, y1_s - hw), hw, color, -1)
+                    cv2.line(rgb, (x1_s, y2_s - 10), (x1_s - 5, y2_s), (200, 200, 200), 2)
+                elif obj["class"] == "chair":
+                    cv2.circle(rgb, (sx, sy), rw, color, -1)
+                    cv2.line(rgb, (x1_s, sy + rw), (x1_s, y2_s), color, 2)
+                    cv2.rectangle(rgb, (sx - rw//2, y1_s), (sx + rw//2, sy - rw//2), color, -1)
+                elif obj["class"] == "bottle":
+                    cv2.rectangle(rgb, (x1_s, y1_s + rh//3), (x2_s, y2_s), color, -1)
+                    cv2.rectangle(rgb, (sx - rw//3, y1_s), (sx + rw//3, y1_s + rh//3), color, -1)
+                elif obj["class"] == "exit sign":
+                    cv2.rectangle(rgb, (x1_s, y1_s), (x2_s, y2_s), color, -1)
+                    scale_text = max(0.3, min(0.6, (x2_s - x1_s) / 100.0))
+                    cv2.putText(rgb, "EXIT", (sx - rw + 4, sy + rh//3), 
+                                cv2.FONT_HERSHEY_SIMPLEX, scale_text, (255, 255, 255), 1)
+                                
+                depth_val_mm = dz * 1000.0
+                depth[y1_s:y2_s, x1_s:x2_s] = float(depth_val_mm)
+                
+                self.visible_sim_objects.append({
+                    "class": obj["class"],
+                    "x1": x1_s, "y1": y1_s, "x2": x2_s, "y2": y2_s,
+                    "depth_meters": float(dz),
+                    "lateral_offset_meters": float(dx)
+                })
+                
             tracking_ok = (int(self.sim_t) % 20 < 15)
             
             return rgb, depth, pose, tracking_ok
@@ -250,8 +387,36 @@ def process_safety_corridors(depth_frame: np.ndarray) -> Dict[str, Any]:
         "escape_vector": escape_vector
     }
 
-def run_local_bounding_box_pipeline(rgb: np.ndarray, depth: np.ndarray) -> List[Dict[str, Any]]:
+def run_local_bounding_box_pipeline(rgb: np.ndarray, depth: np.ndarray, sim_objects: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Runs local YOLO object detection and maps depth centers."""
+    if sim_objects is not None:
+        objects = []
+        for idx, obj in enumerate(sim_objects):
+            class_name = obj["class"]
+            depth_meters = obj["depth_meters"]
+            lateral_offset_meters = obj["lateral_offset_meters"]
+            
+            dist_cat = "unknown"
+            if depth_meters < 0.8:
+                dist_cat = "very close"
+            elif depth_meters < 1.5:
+                dist_cat = "close"
+            else:
+                dist_cat = "medium"
+                
+            x1, y1, x2, y2 = obj["x1"], obj["y1"], obj["x2"], obj["y2"]
+            cv2.rectangle(rgb, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(rgb, f"{class_name} {depth_meters:.1f}m", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)
+
+            objects.append({
+                "tracking_id": idx,
+                "class": class_name,
+                "3d_coordinates": {"x": lateral_offset_meters, "y": 0.0, "z": depth_meters},
+                "distance_category": dist_cat
+            })
+        return objects
+
     if local_yolo is None:
         return []
     
@@ -535,7 +700,7 @@ class VickyEdgeApp:
             if COMPUTE_MODE == 1:
                 inference_start: float = time.time()
                 if PERCEPTION_MODE == "A":
-                    objects = run_local_bounding_box_pipeline(rgb, depth)
+                    objects = run_local_bounding_box_pipeline(rgb, depth, self.sensor.visible_sim_objects if self.sensor.use_simulator else None)
                     inference_ms = (time.time() - inference_start) * 1000.0
                     
                     if zones["center_clearance_mm"] < 1200:
@@ -653,7 +818,7 @@ class VickyEdgeApp:
             # ----------------------------------------------------
             elif COMPUTE_MODE == 3:
                 inference_start = time.time()
-                objects = run_local_bounding_box_pipeline(rgb, depth)
+                objects = run_local_bounding_box_pipeline(rgb, depth, self.sensor.visible_sim_objects if self.sensor.use_simulator else None)
                 inference_ms = (time.time() - inference_start) * 1000.0
                 
                 self.current_center_clearance = zones["center_clearance_mm"]
