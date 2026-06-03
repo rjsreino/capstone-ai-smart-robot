@@ -113,14 +113,60 @@ async def telemetry_stream(websocket: WebSocket):
             objects = data.get("semantic_objects_in_frustum")
             if objects is not None:
                 with zva.frame_lock:
-                    zva.semantic_objects = [
-                        {
-                            "label": obj.get("class", ""),
-                            "x": obj.get("3d_coordinates", {}).get("x", 0.0),
-                            "z": obj.get("3d_coordinates", {}).get("z", 0.0)
-                        }
-                        for obj in objects
-                    ]
+                    # Clear occupancy grid for simulated/telemetry mode
+                    for r in range(100):
+                        for c in range(100):
+                            zva.occupancy_grid[r][c] = 0
+                            
+                    tx_m = zva.pose_data.get("x", 0.0) / 1000.0
+                    tz_m = zva.pose_data.get("z", 0.0) / 1000.0
+                    yaw_rad = np.radians(zva.pose_data.get("yaw", 0.0))
+                    
+                    zva.semantic_objects = []
+                    zva.latest_detections = []
+                    
+                    for idx, obj in enumerate(objects):
+                        coords = obj.get("3d_coordinates", {})
+                        x_c = coords.get("x", 0.0)
+                        z_c = coords.get("z", 0.0)
+                        class_name = obj.get("class", "object")
+                        
+                        # Project local camera coords to world coordinates
+                        x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                        z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                        
+                        # Convert to grid indices (0-99)
+                        grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
+                        grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
+                        
+                        # Mark occupancy grid cells around the object as obstacles
+                        for dr in [-1, 0, 1]:
+                            for dc in [-1, 0, 1]:
+                                r_idx = max(0, min(grid_z + dr, 99))
+                                c_idx = max(0, min(grid_x + dc, 99))
+                                zva.occupancy_grid[r_idx][c_idx] = 1
+                        
+                        zva.semantic_objects.append({
+                            "label": class_name,
+                            "x": grid_x,
+                            "z": grid_z
+                        })
+                        
+                        # Determine position (left, center, right)
+                        if x_c < -0.3:
+                            pos_lbl = "left"
+                        elif x_c > 0.3:
+                            pos_lbl = "right"
+                        else:
+                            pos_lbl = "center"
+                            
+                        zva.latest_detections.append({
+                            "class_name": class_name,
+                            "position": pos_lbl,
+                            "distance": obj.get("distance_category", "medium"),
+                            "depth_meters": z_c,
+                            "confidence": 1.0
+                        })
     except WebSocketDisconnect:
         print("[SERVER WS] Telemetry socket disconnected.")
     except Exception as e:

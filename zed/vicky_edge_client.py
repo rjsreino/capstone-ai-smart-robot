@@ -112,7 +112,7 @@ class EdgeSensorPipeline:
         self.processor: Optional[ZedDepthProcessor] = None
         self.sim_t: float = 0.0
         self.sim_pose_x: float = 0.0
-        self.sim_pose_z: float = 0.0
+        self.sim_pose_z: float = -4.5
         self.sim_yaw: float = 0.0
         self.visible_sim_objects = []
         
@@ -185,6 +185,22 @@ class EdgeSensorPipeline:
             
             # Simulate forward path walking with slight periodic drift
             self.sim_pose_z += 0.05
+            if self.sim_pose_z > 4.5:
+                self.sim_pose_z = -4.5
+                self.sim_objects[0]["world_z"] = 6.0
+                self.sim_objects[1]["world_z"] = 10.0
+                self.sim_objects[2]["world_z"] = 4.0
+                self.sim_objects[3]["world_z"] = 14.0
+                self.sim_objects[4]["world_z"] = 18.0
+                self.sim_objects[5]["world_z"] = 12.0
+                
+                self.sim_objects[0]["world_x"] = -0.5
+                self.sim_objects[1]["world_x"] = 0.3
+                self.sim_objects[2]["world_x"] = -0.3
+                self.sim_objects[3]["world_x"] = 0.6
+                self.sim_objects[4]["world_x"] = -0.2
+                self.sim_objects[5]["world_x"] = 0.0
+                
             self.sim_pose_x = 0.4 * np.sin(self.sim_t * 0.4)
             self.sim_yaw = 4.0 * np.cos(self.sim_t * 0.4)
             
