@@ -520,7 +520,7 @@ export default function App() {
           <Text style={styles.panelLabel}>LIVE SLAM OCCUPANCY MAP</Text>
           <View style={styles.webViewContainer}>
             <WebView
-              source={{ uri: `${serverUrl}/map` }}
+              source={{ uri: `${serverUrl}/map?embed=true` }}
               style={styles.webView}
               javaScriptEnabled={true}
               domStorageEnabled={true}

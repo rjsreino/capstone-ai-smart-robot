@@ -95,6 +95,7 @@ USER_INTERACTION_COOLDOWN = 5.0
 running = True
 voice_interaction_active = False
 tts_playing = False
+telemetry_source_active = False
 
 latest_detections = []
 latest_frame = None
@@ -611,27 +612,28 @@ def vision_loop():
             center_dist = zones['center']['median']
             right_dist = zones['right']['median']
             
-            zones_data = {
-                'left': left_dist,
-                'center': center_dist,
-                'right': right_dist
-            }
+            if not telemetry_source_active:
+                zones_data = {
+                    'left': left_dist,
+                    'center': center_dist,
+                    'right': right_dist
+                }
 
-            # Safety Threshold Calculation
-            CRITICAL_STOP_DIST = 500.0  # mm
-            if center_dist < CRITICAL_STOP_DIST or (left_dist < CRITICAL_STOP_DIST and right_dist < CRITICAL_STOP_DIST):
-                guidance_cmd = "STOP! DANGER"
-                guidance_color = (0, 0, 255)
-            elif center_dist >= safe_distance_threshold:
-                guidance_cmd = "GO FORWARD"
-                guidance_color = (0, 255, 0)
-            else:
-                if left_dist > right_dist:
-                    guidance_cmd = "TURN LEFT"
-                    guidance_color = (0, 255, 255)
+                # Safety Threshold Calculation
+                CRITICAL_STOP_DIST = 500.0  # mm
+                if center_dist < CRITICAL_STOP_DIST or (left_dist < CRITICAL_STOP_DIST and right_dist < CRITICAL_STOP_DIST):
+                    guidance_cmd = "STOP! DANGER"
+                    guidance_color = (0, 0, 255)
+                elif center_dist >= safe_distance_threshold:
+                    guidance_cmd = "GO FORWARD"
+                    guidance_color = (0, 255, 0)
                 else:
-                    guidance_cmd = "TURN RIGHT"
-                    guidance_color = (255, 128, 0)
+                    if left_dist > right_dist:
+                        guidance_cmd = "TURN LEFT"
+                        guidance_color = (0, 255, 255)
+                    else:
+                        guidance_cmd = "TURN RIGHT"
+                        guidance_color = (255, 128, 0)
 
         # 2. YOLO Object Detection
         results = model(
@@ -853,16 +855,17 @@ def vision_loop():
             latest_detections = detections
             latest_frame = rgb_frame.copy()
             latest_depth_map = depth_frame.copy()
-            pose_data = {
-                "x": float(processor.tx),
-                "y": float(processor.ty),
-                "z": float(processor.tz),
-                "roll": float(processor.roll),
-                "pitch": float(processor.pitch),
-                "yaw": float(processor.yaw)
-            }
-            occupancy_grid = processor.occupancy_grid.tolist()
-            semantic_objects = temp_semantic_objects
+            if not telemetry_source_active:
+                pose_data = {
+                    "x": float(processor.tx),
+                    "y": float(processor.ty),
+                    "z": float(processor.tz),
+                    "roll": float(processor.roll),
+                    "pitch": float(processor.pitch),
+                    "yaw": float(processor.yaw)
+                }
+                occupancy_grid = processor.occupancy_grid.tolist()
+                semantic_objects = temp_semantic_objects
 
         # 3. Proactive Auto Announcement
         now = time.time()

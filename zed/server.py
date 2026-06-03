@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
 import uvicorn
 import threading
 import zed_vision_assistant as zva
@@ -75,10 +75,94 @@ app = FastAPI()
 @app.on_event("startup")
 async def startup_event():
     await db_logger.start()
+    
+    # Initialize simulated obstacles on the occupancy grid so that
+    # the A* path planning has objects to route around in simulation mode.
+    # We populate some default obstacles (borders + pillars) on startup.
+    for r in range(100):
+        for c in range(100):
+            if r == 0 or r == 99 or c == 0 or c == 99:
+                zva.occupancy_grid[r][c] = 1
+                
+    # Center pillar obstacle
+    for r in range(40, 50):
+        for c in range(45, 55):
+            zva.occupancy_grid[r][c] = 1
+            
+    # Lower-left pillar obstacle
+    for r in range(65, 75):
+        for c in range(20, 30):
+            zva.occupancy_grid[r][c] = 1
+
+    # Upper-right pillar obstacle
+    for r in range(25, 35):
+        for c in range(70, 80):
+            zva.occupancy_grid[r][c] = 1
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await db_logger.stop()
+
+@app.websocket("/ws/telemetry/stream")
+async def telemetry_stream(websocket: WebSocket):
+    await websocket.accept()
+    print("[SERVER WS] Telemetry socket connected from edge client.")
+    zva.telemetry_source_active = True
+    try:
+        while True:
+            data = await websocket.receive_json()
+            user_pose = data.get("user_spatial_pose")
+            if user_pose:
+                pos = user_pose.get("position_meters", {})
+                rot = user_pose.get("rotation_degrees", {})
+                with zva.frame_lock:
+                    # Update ZED pose data in millimeters
+                    zva.pose_data["x"] = pos.get("x", 0.0) * 1000.0
+                    zva.pose_data["y"] = pos.get("y", 0.0) * 1000.0
+                    zva.pose_data["z"] = pos.get("z", 0.0) * 1000.0
+                    zva.pose_data["roll"] = rot.get("roll", 0.0)
+                    zva.pose_data["pitch"] = rot.get("pitch", 0.0)
+                    zva.pose_data["yaw"] = rot.get("yaw", 0.0)
+            
+            zones = data.get("spatial_depth_zones")
+            if zones:
+                with zva.frame_lock:
+                    zva.zones_data["left"] = zones.get("left_clearance_mm", 0.0)
+                    zva.zones_data["center"] = zones.get("center_clearance_mm", 0.0)
+                    zva.zones_data["right"] = zones.get("right_clearance_mm", 0.0)
+                    zva.guidance_cmd = zones.get("escape_vector", "STOP")
+            
+            # Map detected obstacles if present
+            objects = data.get("semantic_objects_in_frustum")
+            if objects is not None:
+                with zva.frame_lock:
+                    zva.semantic_objects = [
+                        {
+                            "label": obj.get("class", ""),
+                            "x": obj.get("3d_coordinates", {}).get("x", 0.0),
+                            "z": obj.get("3d_coordinates", {}).get("z", 0.0)
+                        }
+                        for obj in objects
+                    ]
+    except WebSocketDisconnect:
+        print("[SERVER WS] Telemetry socket disconnected.")
+    except Exception as e:
+        print(f"[SERVER WS ERROR] Telemetry: {e}")
+    finally:
+        zva.telemetry_source_active = False
+
+@app.websocket("/ws/video/stream")
+async def video_stream(websocket: WebSocket):
+    await websocket.accept()
+    print("[SERVER WS] Video socket connected from edge client.")
+    try:
+        while True:
+            # Just consume video bytes (used for HUD in production)
+            await websocket.receive_bytes()
+    except WebSocketDisconnect:
+        print("[SERVER WS] Video socket disconnected.")
+    except Exception as e:
+        pass
 
 @app.get("/")
 def root():
@@ -488,6 +572,58 @@ def map_view():
                 text-align: center;
             }
         }
+
+        /* Embedded (mobile WebView) styles */
+        body.embed-mode {
+            padding: 0 !important;
+            margin: 0 !important;
+            background-color: transparent !important;
+            min-height: 100vh !important;
+            overflow: hidden !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        body.embed-mode .header-container,
+        body.embed-mode .dashboard-section,
+        body.embed-mode .map-section h3,
+        body.embed-mode .map-section > div:last-child {
+            display: none !important;
+        }
+
+        body.embed-mode .hud-container {
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: center !important;
+            gap: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+
+        body.embed-mode .map-section {
+            background: transparent !important;
+            backdrop-filter: none !important;
+            border: none !important;
+            box-shadow: none !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border-radius: 0 !important;
+            width: 100% !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+
+        body.embed-mode .canvas-container {
+            width: 90vw !important;
+            max-width: 320px !important;
+            aspect-ratio: 1 / 1 !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            margin: 0 auto !important;
+        }
     </style>
 </head>
 <body>
@@ -604,6 +740,12 @@ def map_view():
     <div id="toast" class="toast">Target set successfully!</div>
 
     <script>
+        // Check for embed parameter in URL to style map specifically for mobile companion app
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('embed') === 'true' || urlParams.get('mobile') === 'true') {
+            document.body.classList.add('embed-mode');
+        }
+
         const canvas = document.getElementById('mapCanvas');
         const ctx = canvas.getContext('2d');
         let currentGoal = null;
@@ -1051,11 +1193,19 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
     return {"transcript": transcript}
 
 if __name__ == "__main__":
-    vision_thread = threading.Thread(
-        target=zva.vision_loop,
-        daemon=True
-    )
+    import argparse
+    parser = argparse.ArgumentParser(description="VICKY FastAPI Server")
+    parser.add_argument("--no-camera", action="store_true", help="Do not run local ZED camera vision loop (use edge client)")
+    args = parser.parse_known_args()[0]
 
-    vision_thread.start()
+    if not args.no_camera:
+        vision_thread = threading.Thread(
+            target=zva.vision_loop,
+            daemon=True
+        )
+        vision_thread.start()
+        print("[SERVER] Started local ZED vision thread.")
+    else:
+        print("[SERVER] Running in edge-telemetry mode. Local ZED camera thread disabled.")
 
     uvicorn.run(app, host="0.0.0.0", port=8000)

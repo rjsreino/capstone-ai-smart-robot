@@ -52,6 +52,12 @@ parser.add_argument("--session", type=str, default="session_prod_01",
                     help="Session identifier string")
 parser.add_argument("--simulated", action="store_true", default=False,
                     help="Force ZED camera hardware simulation mode")
+parser.add_argument("--force-imu", action="store_true", default=False,
+                    help="Force smartphone IMU dead-reckoning fallback protocol, bypassing ZED VSLAM positional tracking")
+parser.add_argument("--step-thresh", type=float, default=1.5,
+                    help="Magnitude threshold for pedometer step detection (m/s^2)")
+parser.add_argument("--step-len", type=float, default=0.75,
+                    help="Walking step stride length in meters")
 args, unknown = parser.parse_known_args()
 
 COMPUTE_MODE: int = args.mode       # 1, 2, 3
@@ -60,6 +66,9 @@ SAFETY_MODE: str = args.safety       # X, Y
 SERVER_URI: str = args.server
 SESSION_ID: str = args.session
 FORCE_SIMULATION: bool = args.simulated
+FORCE_IMU_FALLBACK: bool = args.force_imu
+STEP_THRESHOLD: float = args.step_thresh
+STEP_LENGTH: float = args.step_len
 
 # Setup sound mixer for alert clicks
 pygame.mixer.init()
@@ -311,6 +320,12 @@ class VickyEdgeApp:
         self.dr_vx: float = 0.0
         self.dr_vz: float = 0.0
         self.last_imu_time: float = time.time()
+        self.last_step_time: float = 0.0
+        self.step_count: int = 0
+        self.step_length: float = STEP_LENGTH
+        self.offset_x: float = 0.0
+        self.offset_y: float = 0.0
+        self.offset_z: float = 0.0
         self.last_valid_pose: Dict[str, Any] = {
             "position_meters": {"x": 0.0, "y": 0.0, "z": 0.0},
             "rotation_degrees": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
@@ -326,7 +341,7 @@ class VickyEdgeApp:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
-        async def handler(websocket: websockets.WebSocketServerProtocol, path: str) -> None:
+        async def handler(websocket: websockets.WebSocketServerProtocol, *args, **kwargs) -> None:
             print("[EDGE SERVER] Smartphone audio transceiver linked.")
             self.smartphone_clients.add(websocket)
             try:
@@ -335,27 +350,53 @@ class VickyEdgeApp:
                         data_str = message.decode("utf-8") if isinstance(message, bytes) else message
                         data = json.loads(data_str)
                         if data.get("packet_type") == "SMARTPHONE_IMU_STREAM":
+                            current_time = time.time()
+                            ax_local = float(data.get("linear_accel", {}).get("x", 0.0))
+                            ay_local = float(data.get("linear_accel", {}).get("y", 0.0))
+                            az_local = float(data.get("linear_accel", {}).get("z", 0.0))
+                            
+                            roll_rad = float(data.get("rotation_rpy", {}).get("roll", 0.0))
+                            pitch_rad = float(data.get("rotation_rpy", {}).get("pitch", 0.0))
+                            yaw_rad = float(data.get("rotation_rpy", {}).get("yaw", 0.0))
+                            
                             with self.imu_lock:
                                 self.latest_imu_data = {
-                                    "timestamp": float(data.get("timestamp", time.time())),
-                                    "linear_accel": {
-                                        "x": float(data.get("linear_accel", {}).get("x", 0.0)),
-                                        "y": float(data.get("linear_accel", {}).get("y", 0.0)),
-                                        "z": float(data.get("linear_accel", {}).get("z", 0.0))
-                                    },
-                                    "rotation_rpy": {
-                                        "roll": float(data.get("rotation_rpy", {}).get("roll", 0.0)),
-                                        "pitch": float(data.get("rotation_rpy", {}).get("pitch", 0.0)),
-                                        "yaw": float(data.get("rotation_rpy", {}).get("yaw", 0.0))
-                                    }
+                                    "timestamp": float(data.get("timestamp", current_time)),
+                                    "linear_accel": {"x": ax_local, "y": ay_local, "z": az_local},
+                                    "rotation_rpy": {"roll": roll_rad, "pitch": pitch_rad, "yaw": yaw_rad}
                                 }
+                                
+                                # Run Pedometer Dead Reckoning (PDR) if fallback is active
+                                if self.fallback_active:
+                                    # Pedometer magnitude of linear acceleration vector (excluding gravity)
+                                    accel_mag = np.sqrt(ax_local**2 + ay_local**2 + az_local**2)
+                                    # Threshold config, minimum 350ms cool-down
+                                    if accel_mag > STEP_THRESHOLD and (current_time - self.last_step_time > 0.35):
+                                        self.step_count += 1
+                                        self.last_step_time = current_time
+                                        
+                                        # Project step along phone's yaw heading (X=lateral, Z=forward)
+                                        dx = self.step_length * np.sin(yaw_rad)
+                                        dz = self.step_length * np.cos(yaw_rad)
+                                        
+                                        self.dr_x += dx
+                                        self.dr_z += dz
+                                        print(f"[PDR STEP] Step #{self.step_count} detected! Mag={accel_mag:.2f} | Yaw={np.degrees(yaw_rad):.1f}° | Delta X={dx:.2f}, Z={dz:.2f} | Robot X={self.dr_x:.2f}, Z={self.dr_z:.2f}")
+                                else:
+                                    # Sync baseline to latest valid ZED pose when VSLAM is active
+                                    self.dr_x = self.last_valid_pose["position_meters"]["x"]
+                                    self.dr_y = self.last_valid_pose["position_meters"]["y"]
+                                    self.dr_z = self.last_valid_pose["position_meters"]["z"]
+                                    self.last_step_time = current_time
+                                    
                             self.imu_packet_count += 1
-                            if self.imu_packet_count % 100 == 0:
-                                print(f"[EDGE SERVER] Transceived {self.imu_packet_count} IMU packets from smartphone. Status: CONNECTIVITY OK.")
+                            if self.imu_packet_count % 50 == 0:
+                                accel_mag = np.sqrt(ax_local**2 + ay_local**2 + az_local**2)
+                                print(f"[IMU DATA] Packet #{self.imu_packet_count} | Accel: X={ax_local:.2f}, Y={ay_local:.2f}, Z={az_local:.2f} (Mag={accel_mag:.2f}) | RPY (rad): Roll={roll_rad:.2f}, Pitch={pitch_rad:.2f}, Yaw={yaw_rad:.2f}")
                     except Exception as e:
-                        pass
-            except Exception:
-                pass
+                        print(f"[EDGE SERVER ERROR] Error parsing IMU message: {e}")
+            except Exception as e:
+                print(f"[EDGE SERVER] Connection error: {e}")
             finally:
                 if websocket in self.smartphone_clients:
                     self.smartphone_clients.remove(websocket)
@@ -375,12 +416,17 @@ class VickyEdgeApp:
         """Broadcasts navigation guidance strings to connected smartphone web app clients."""
         if not self.smartphone_clients:
             return
-        for client in list(self.smartphone_clients):
+        
+        async def send_to_client(client, payload_str):
             try:
-                await client.send(json.dumps({"instruction": message_text}))
+                await client.send(payload_str)
             except Exception:
                 if client in self.smartphone_clients:
                     self.smartphone_clients.remove(client)
+
+        payload = json.dumps({"instruction": message_text})
+        for client in list(self.smartphone_clients):
+            asyncio.create_task(send_to_client(client, payload))
 
     def _safety_click_alert_worker(self) -> None:
         """Local geometric safety alerting thread (Approach X - alarm clicks)."""
@@ -466,71 +512,54 @@ class VickyEdgeApp:
                 continue
                 
             current_time = time.time()
-            if tracking_ok:
+            if tracking_ok and not FORCE_IMU_FALLBACK:
                 # Primary spatial map baseline
-                self.fallback_active = False
-                self.last_valid_pose = pose
-                self.last_imu_time = current_time
+                raw_x = pose["position_meters"]["x"]
+                raw_y = pose["position_meters"]["y"]
+                raw_z = pose["position_meters"]["z"]
+                
+                with self.imu_lock:
+                    if self.fallback_active:
+                        # Transitioning back to VSLAM from Fallback!
+                        # Calculate the offset to align VSLAM cleanly with our current PDR position
+                        self.offset_x = self.dr_x - raw_x
+                        self.offset_y = self.dr_y - raw_y
+                        self.offset_z = self.dr_z - raw_z
+                        self.fallback_active = False
+                        print(f"[POSE ALIGN] Recovered VSLAM! Offset X={self.offset_x:.2f}, Z={self.offset_z:.2f}")
+                        
+                    # Apply offsets to pose
+                    pose["position_meters"]["x"] = raw_x + self.offset_x
+                    pose["position_meters"]["y"] = raw_y + self.offset_y
+                    pose["position_meters"]["z"] = raw_z + self.offset_z
+                    self.last_valid_pose = pose
             else:
                 # Initialize fallback tracking protocol when tracking drops
-                if not self.fallback_active:
-                    self.fallback_active = True
-                    self.dr_x = self.last_valid_pose["position_meters"]["x"]
-                    self.dr_y = self.last_valid_pose["position_meters"]["y"]
-                    self.dr_z = self.last_valid_pose["position_meters"]["z"]
-                    self.dr_vx = 0.0
-                    self.dr_vz = 0.0
-                    self.last_imu_time = current_time
-                    
-                # Integrate the incoming smartphone linear acceleration metrics over time
-                dt = current_time - self.last_imu_time
-                self.last_imu_time = current_time
-                
-                # Fetch latest smartphone IMU
                 with self.imu_lock:
-                    imu = self.latest_imu_data
+                    if not self.fallback_active:
+                        self.fallback_active = True
+                        self.dr_x = self.last_valid_pose["position_meters"]["x"]
+                        self.dr_y = self.last_valid_pose["position_meters"]["y"]
+                        self.dr_z = self.last_valid_pose["position_meters"]["z"]
                     
-                ax_world = 0.0
-                az_world = 0.0
+                    dr_x_val = self.dr_x
+                    dr_y_val = self.dr_y
+                    dr_z_val = self.dr_z
+                    imu = self.latest_imu_data
+                
                 roll_deg = self.last_valid_pose["rotation_degrees"]["roll"]
                 pitch_deg = self.last_valid_pose["rotation_degrees"]["pitch"]
                 yaw_deg = self.last_valid_pose["rotation_degrees"]["yaw"]
                 
                 if imu is not None:
-                    accel = imu.get("linear_accel", {})
                     rot = imu.get("rotation_rpy", {})
-                    
-                    ax_local = float(accel.get("x", 0.0))
-                    ay_local = float(accel.get("y", 0.0))
-                    az_local = float(accel.get("z", 0.0))
-                    
-                    roll_rad = float(rot.get("roll", 0.0))
-                    pitch_rad = float(rot.get("pitch", 0.0))
-                    yaw_rad = float(rot.get("yaw", 0.0))
-                    
-                    # Convert to degrees for payload
-                    roll_deg = float(np.degrees(roll_rad))
-                    pitch_deg = float(np.degrees(pitch_rad))
-                    yaw_deg = float(np.degrees(yaw_rad))
-                    
-                    # 2D projection along the yaw heading with pitch/roll correction
-                    a_forward_h = ay_local * np.cos(pitch_rad) - az_local * np.sin(pitch_rad)
-                    a_lateral_h = ax_local * np.cos(roll_rad) + az_local * np.sin(roll_rad)
-                    
-                    # Rotate horizontally to world coordinates
-                    ax_world = a_lateral_h * np.cos(yaw_rad) + a_forward_h * np.sin(yaw_rad)
-                    az_world = -a_lateral_h * np.sin(yaw_rad) + a_forward_h * np.cos(yaw_rad)
-                
-                # Double integration with damping (0.95 velocity dampening factor)
-                self.dr_vx = (self.dr_vx + ax_world * dt) * 0.95
-                self.dr_vz = (self.dr_vz + az_world * dt) * 0.95
-                
-                self.dr_x += self.dr_vx * dt
-                self.dr_z += self.dr_vz * dt
+                    roll_deg = float(np.degrees(float(rot.get("roll", 0.0))))
+                    pitch_deg = float(np.degrees(float(rot.get("pitch", 0.0))))
+                    yaw_deg = float(np.degrees(float(rot.get("yaw", 0.0))))
                 
                 # Override the SLAM baseline
                 pose = {
-                    "position_meters": {"x": self.dr_x, "y": self.dr_y, "z": self.dr_z},
+                    "position_meters": {"x": dr_x_val, "y": dr_y_val, "z": dr_z_val},
                     "rotation_degrees": {"roll": roll_deg, "pitch": pitch_deg, "yaw": yaw_deg}
                 }
                 
@@ -567,8 +596,9 @@ class VickyEdgeApp:
                 # Broadcast local text guidance to Wi-Fi loop Smartphone clients
                 await self.broadcast_to_smartphone(audio_text_guidance)
                 
+                tracking_source = "FALLBACK_IMU" if self.fallback_active else "VSLAM"
                 total_delay_ms: float = (time.time() - start_time) * 1000.0
-                print(f"[HUD LOCAL] SRT: {total_delay_ms:.1f}ms | Latency: {inference_ms:.1f}ms | Zones (C): {zones['center_clearance_mm']:.0f}mm | Guidance: {audio_text_guidance}")
+                print(f"[HUD LOCAL] [{tracking_source}] SRT: {total_delay_ms:.1f}ms | Latency: {inference_ms:.1f}ms | Zones (C): {zones['center_clearance_mm']:.0f}mm | Guidance: {audio_text_guidance}")
                 
                 # Send telemetry / video to server if connected
                 if self.websocket_video and self.websocket_telemetry:

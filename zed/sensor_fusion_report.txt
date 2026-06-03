@@ -1,0 +1,374 @@
+SENSOR FUSION AUTOMATED VERIFICATION REPORT
+==========================================
+Timestamp: 2026-06-02 17:11:46
+IMU Streaming: SUCCESS
+Step Detection: SUCCESS (1 steps)
+Pose Alignment: SUCCESS
+------------------------------------------
+Full Client Output Log:
+pygame 2.6.1 (SDL 2.28.4, Python 3.11.5)
+Hello from the pygame community. https://www.pygame.org/contribute.html
+[CLIENT] Initializing local YOLOv8n model...
+[CLIENT] Local YOLOv8 loaded on: cpu
+[CLIENT] Sensor Pipeline running in SIMULATION mode.
+[CLIENT] Connecting telemetry WS: ws://127.0.0.1:8000/ws/telemetry/streamC:\Users\RJS\Documents\\uc138\uc885\ub300\Coding Workspace\Capstone Design AI Smart Robot\capstone-ai-smart-robot\zed\vicky_edge_client.py:344: DeprecationWarning: websockets.WebSocketServerProtocol is deprecated
+  async def handler(websocket: websockets.WebSocketServerProtocol, *args, **kwargs) -> None:
+
+[EDGE SERVER] Local smartphone WebSocket server listening on port 8005.
+[EDGE SERVER] Smartphone audio transceiver linked.
+[CLIENT] Connecting video WS: ws://127.0.0.1:8000/ws/video/stream
+[CLIENT] Sockets connected successfully to Cloud Backend.
+[CLIENT] Starting Edge Main Pipeline Loop...
+  Compute Mode:    Approach 1
+  Perception Mode: Approach A
+  Safety Mode:     Approach X
+============================================================
+[HUD LOCAL] [VSLAM] SRT: 195.0ms | Latency: 123.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.9ms | Latency: 18.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.4ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 16.8ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.1ms | Latency: 18.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #50 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.6ms | Latency: 18.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.5ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.7ms | Latency: 19.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.3ms | Latency: 15.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.2ms | Latency: 20.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.5ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 18.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 17.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.3ms | Latency: 18.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 95.6ms | Latency: 25.9ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.0ms | Latency: 16.7ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 15.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #100 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 16.4ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 93.7ms | Latency: 21.3ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.8ms | Latency: 19.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.1ms | Latency: 20.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.5ms | Latency: 16.9ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.6ms | Latency: 17.8ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.5ms | Latency: 18.7ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.3ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 17.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.5ms | Latency: 17.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.7ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.4ms | Latency: 17.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 18.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.9ms | Latency: 16.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 16.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.8ms | Latency: 18.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #150 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 17.4ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.4ms | Latency: 17.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.4ms | Latency: 18.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.8ms | Latency: 15.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.8ms | Latency: 18.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.4ms | Latency: 18.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.9ms | Latency: 16.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.1ms | Latency: 18.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.6ms | Latency: 19.9ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.0ms | Latency: 19.4ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 120.3ms | Latency: 50.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.6ms | Latency: 19.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.7ms | Latency: 20.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.5ms | Latency: 19.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #200 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 97.4ms | Latency: 25.4ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 94.7ms | Latency: 23.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.1ms | Latency: 18.6ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.4ms | Latency: 17.6ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.0ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.1ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.9ms | Latency: 16.7ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.7ms | Latency: 18.8ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 91.2ms | Latency: 22.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 92.6ms | Latency: 22.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.9ms | Latency: 19.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 99.7ms | Latency: 28.8ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 91.5ms | Latency: 21.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #250 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 89.0ms | Latency: 18.8ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 96.1ms | Latency: 27.2ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 17.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 96.1ms | Latency: 23.7ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.3ms | Latency: 19.6ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 92.3ms | Latency: 20.6ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.7ms | Latency: 19.3ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.8ms | Latency: 16.5ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.7ms | Latency: 19.8ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.1ms | Latency: 20.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 91.0ms | Latency: 20.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.8ms | Latency: 18.5ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.2ms | Latency: 18.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 17.2ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.0ms | Latency: 15.4ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #300 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 88.3ms | Latency: 17.7ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 17.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.9ms | Latency: 16.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.5ms | Latency: 16.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.3ms | Latency: 15.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 17.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.4ms | Latency: 19.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.7ms | Latency: 20.7ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 95.9ms | Latency: 25.2ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.2ms | Latency: 19.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.9ms | Latency: 21.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.3ms | Latency: 15.5ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 16.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.0ms | Latency: 17.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #350 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 85.3ms | Latency: 15.5ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.2ms | Latency: 18.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.3ms | Latency: 16.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.8ms | Latency: 16.5ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.5ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 15.5ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.7ms | Latency: 19.1ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.3ms | Latency: 18.2ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.9ms | Latency: 16.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 93.9ms | Latency: 23.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.4ms | Latency: 18.1ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.6ms | Latency: 18.0ms | Zones (C): 2498mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 17.0ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.2ms | Latency: 19.0ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 17.3ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.8ms | Latency: 17.6ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #400 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 17.1ms | Zones (C): 2504mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.3ms | Latency: 16.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.8ms | Latency: 19.6ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.1ms | Latency: 16.0ms | Zones (C): 2492mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 17.1ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.9ms | Latency: 18.1ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 16.5ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.0ms | Latency: 17.1ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.0ms | Latency: 19.2ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 16.9ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 17.6ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.6ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.5ms | Latency: 17.2ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.4ms | Latency: 18.1ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.2ms | Latency: 19.0ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.0ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #450 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 88.3ms | Latency: 18.6ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.2ms | Latency: 17.1ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 18.1ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 16.5ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 17.0ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.1ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.5ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.0ms | Latency: 16.0ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.5ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.5ms | Latency: 19.2ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.4ms | Latency: 16.0ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.9ms | Latency: 18.2ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.7ms | Latency: 21.0ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.1ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 93.6ms | Latency: 23.6ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.8ms | Latency: 19.5ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #500 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.1ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.4ms | Latency: 20.6ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.9ms | Latency: 19.5ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.4ms | Latency: 19.7ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.5ms | Latency: 20.6ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.1ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 17.4ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.0ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.2ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.8ms | Latency: 18.6ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.0ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 16.6ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.5ms | Latency: 17.6ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 90.3ms | Latency: 19.1ms | Zones (C): 2480mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.4ms | Latency: 19.4ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.3ms | Latency: 18.5ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.5ms | Latency: 18.0ms | Zones (C): 2468mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #550 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 90.3ms | Latency: 19.0ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 15.5ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.2ms | Latency: 17.5ms | Zones (C): 2456mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.2ms | Latency: 16.5ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.0ms | Zones (C): 2444mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 91.1ms | Latency: 19.5ms | Zones (C): 2432mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 16.0ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 17.0ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 18.6ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.0ms | Latency: 17.6ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.0ms | Latency: 19.0ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.5ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.2ms | Latency: 18.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.0ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.1ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #600 | Accel: X=2.20, Y=0.10, Z=0.10 (Mag=2.20) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 89.6ms | Latency: 19.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 16.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 16.0ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 16.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.5ms | Latency: 18.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 17.0ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.9ms | Latency: 16.5ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 84.9ms | Latency: 15.0ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 15.9ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.6ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.1ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 17.0ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 17.0ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.2ms | Latency: 16.6ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 15.5ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #650 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 16.0ms | Zones (C): 2360mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 17.6ms | Zones (C): 2372mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 15.6ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.0ms | Latency: 18.1ms | Zones (C): 2396mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 84.9ms | Latency: 15.0ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 18.0ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 16.6ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.3ms | Latency: 17.6ms | Zones (C): 2420mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.6ms | Latency: 17.0ms | Zones (C): 2426mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.5ms | Latency: 19.0ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.2ms | Latency: 19.1ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.6ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.1ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 16.5ms | Zones (C): 2408mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.8ms | Latency: 16.8ms | Zones (C): 2396mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.0ms | Zones (C): 2396mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 16.6ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #700 | Accel: X=2.20, Y=0.10, Z=0.10 (Mag=2.20) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 20.0ms | Zones (C): 2384mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.0ms | Latency: 15.5ms | Zones (C): 2372mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.8ms | Latency: 18.6ms | Zones (C): 2360mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 17.2ms | Zones (C): 2348mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 17.0ms | Zones (C): 2336mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.1ms | Latency: 15.5ms | Zones (C): 2312mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.5ms | Latency: 18.5ms | Zones (C): 2288mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 18.0ms | Zones (C): 2198mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.1ms | Latency: 17.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.5ms | Latency: 18.1ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.1ms | Latency: 16.5ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[PDR STEP] Step #1 detected! Mag=2.20 | Yaw=45.0° | Delta X=0.53, Z=0.53 | Robot X=0.99, Z=11.68
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.7ms | Latency: 16.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.6ms | Latency: 17.5ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.1ms | Latency: 17.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 18.1ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.0ms | Latency: 16.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #750 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [FALLBACK_IMU] SRT: 93.7ms | Latency: 23.5ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.0ms | Latency: 16.6ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 17.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.7ms | Latency: 17.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.8ms | Latency: 17.5ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.6ms | Latency: 18.2ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 16.5ms | Zones (C): 2060mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.2ms | Latency: 17.0ms | Zones (C): 2060mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.7ms | Latency: 17.5ms | Zones (C): 2060mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 17.6ms | Zones (C): 2060mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 18.0ms | Zones (C): 2060mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.6ms | Latency: 17.5ms | Zones (C): 2084mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.9ms | Latency: 16.3ms | Zones (C): 2120mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.6ms | Latency: 17.0ms | Zones (C): 2156mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.1ms | Latency: 17.5ms | Zones (C): 2192mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.8ms | Latency: 17.0ms | Zones (C): 2216mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 17.0ms | Zones (C): 2240mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #800 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.2ms | Latency: 16.0ms | Zones (C): 2264mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.1ms | Latency: 16.0ms | Zones (C): 2276mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 17.0ms | Zones (C): 2288mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.2ms | Latency: 16.6ms | Zones (C): 2300mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.7ms | Latency: 17.1ms | Zones (C): 2228mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.1ms | Latency: 16.5ms | Zones (C): 2240mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.6ms | Latency: 17.0ms | Zones (C): 2252mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.8ms | Latency: 16.6ms | Zones (C): 2252mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.0ms | Latency: 17.2ms | Zones (C): 2252mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.6ms | Latency: 16.5ms | Zones (C): 2252mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.5ms | Latency: 15.5ms | Zones (C): 2252mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.8ms | Latency: 16.0ms | Zones (C): 2240mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.3ms | Latency: 19.1ms | Zones (C): 2228mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.3ms | Latency: 15.7ms | Zones (C): 2216mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 89.7ms | Latency: 18.5ms | Zones (C): 2204mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.2ms | Latency: 16.0ms | Zones (C): 2180mm | Guidance: Path ahead looks clear.
+[IMU DATA] Packet #850 | Accel: X=0.02, Y=-0.04, Z=0.23 (Mag=0.23) | RPY (rad): Roll=0.00, Pitch=0.00, Yaw=0.79
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.7ms | Latency: 17.0ms | Zones (C): 2156mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 17.5ms | Zones (C): 2132mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.3ms | Latency: 15.5ms | Zones (C): 2102mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.7ms | Latency: 18.0ms | Zones (C): 1880mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 84.8ms | Latency: 15.6ms | Zones (C): 1820mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.2ms | Latency: 15.0ms | Zones (C): 1760mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.8ms | Latency: 16.6ms | Zones (C): 1688mm | Guidance: Path ahead looks clear.
+[EDGE SERVER] Smartphone audio transceiver unlinked.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.8ms | Latency: 19.0ms | Zones (C): 1592mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 89.2ms | Latency: 18.6ms | Zones (C): 1508mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.3ms | Latency: 18.0ms | Zones (C): 1460mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 89.6ms | Latency: 19.9ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.7ms | Latency: 17.5ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.7ms | Latency: 18.0ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.7ms | Latency: 17.6ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.1ms | Latency: 17.3ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 89.1ms | Latency: 19.0ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.3ms | Latency: 17.0ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.2ms | Latency: 17.7ms | Zones (C): 1448mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.5ms | Latency: 16.1ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn right.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.5ms | Latency: 17.5ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn right.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 17.5ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.6ms | Latency: 16.0ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.2ms | Latency: 16.0ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 87.1ms | Latency: 17.6ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.6ms | Latency: 16.0ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.6ms | Latency: 19.0ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.3ms | Latency: 18.6ms | Zones (C): 600mm | Guidance: Obstacle ahead. Please turn left.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.6ms | Latency: 19.1ms | Zones (C): 1484mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.9ms | Latency: 17.5ms | Zones (C): 1580mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 88.6ms | Latency: 19.0ms | Zones (C): 1640mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.3ms | Latency: 17.1ms | Zones (C): 1706mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 85.5ms | Latency: 16.0ms | Zones (C): 1748mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [FALLBACK_IMU] SRT: 86.6ms | Latency: 16.5ms | Zones (C): 1796mm | Guidance: Path ahead looks clear.
+[POSE ALIGN] Recovered VSLAM! Offset X=1.27, Z=-3.27
+[HUD LOCAL] [VSLAM] SRT: 87.7ms | Latency: 18.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.1ms | Latency: 18.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.0ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 84.7ms | Latency: 15.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 84.9ms | Latency: 15.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.6ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 19.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.3ms | Latency: 17.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 16.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 15.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 15.6ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.4ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 94.7ms | Latency: 23.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 88.7ms | Latency: 18.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.6ms | Latency: 16.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.9ms | Latency: 19.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.2ms | Latency: 16.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.7ms | Latency: 17.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.4ms | Latency: 16.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.8ms | Latency: 16.7ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 85.7ms | Latency: 17.0ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 86.1ms | Latency: 16.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 89.3ms | Latency: 19.7ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 84.7ms | Latency: 15.5ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.1ms | Latency: 17.3ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
+[HUD LOCAL] [VSLAM] SRT: 87.8ms | Latency: 18.1ms | Zones (C): 2516mm | Guidance: Path ahead looks clear.
