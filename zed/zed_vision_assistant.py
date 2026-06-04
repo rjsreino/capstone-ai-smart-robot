@@ -998,6 +998,24 @@ def vision_loop():
 
         # Thread-safe global update
         with frame_lock:
+            live_grid = processor.occupancy_grid.copy()
+            for obj in temp_semantic_objects:
+                label = str(obj.get("label") or obj.get("detected_label") or "").lower()
+                if label == "person":
+                    continue
+                gx = obj.get("x")
+                gz = obj.get("z")
+                if gx is None or gz is None:
+                    continue
+                gx = max(0, min(int(gx), 99))
+                gz = max(0, min(int(gz), 99))
+                marker = 2 if ("door" in label or "exit" in label) else 1
+                for dz in range(-1, 2):
+                    for dx in range(-1, 2):
+                        nz = max(0, min(gz + dz, 99))
+                        nx = max(0, min(gx + dx, 99))
+                        live_grid[nz, nx] = marker
+
             latest_detections = detections
             latest_frame = rgb_frame.copy()
             latest_depth_map = depth_frame.copy()
@@ -1010,7 +1028,7 @@ def vision_loop():
                     "pitch": float(processor.pitch),
                     "yaw": float(processor.yaw)
                 }
-                occupancy_grid = processor.occupancy_grid.tolist()
+                occupancy_grid = live_grid.tolist()
                 semantic_objects = temp_semantic_objects
 
         # 3. Proactive Auto Announcement

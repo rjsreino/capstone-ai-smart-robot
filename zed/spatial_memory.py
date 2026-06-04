@@ -135,6 +135,34 @@ class SpatialMemoryNavigationSystem:
         known = sum(1 for row in grid for cell in row if int(cell) != 2)
         return round((known / total) * 100.0, 2)
 
+    def _grid_counts(self, grid):
+        counts = {"free": 0, "occupied": 0, "special": 0, "unknown": 0}
+        for row in self._normalize_grid(grid):
+            for cell in row:
+                value = int(cell)
+                if value == 0:
+                    counts["free"] += 1
+                elif value == 1:
+                    counts["occupied"] += 1
+                elif value == 2:
+                    counts["special"] += 1
+                else:
+                    counts["unknown"] += 1
+        return counts
+
+    def _merge_static_grid(self, existing_grid, live_grid):
+        existing = self._normalize_grid(existing_grid)
+        live = self._normalize_grid(live_grid)
+        merged = []
+        for r in range(self.height):
+            row = []
+            for c in range(self.width):
+                live_value = int(live[r][c])
+                existing_value = int(existing[r][c])
+                row.append(live_value if live_value != 0 else existing_value)
+            merged.append(row)
+        return merged
+
     def _add_or_update_landmark(self, map_data, landmark):
         for existing in map_data["landmarks"]:
             if existing["type"] != landmark["type"]:
@@ -195,6 +223,7 @@ class SpatialMemoryNavigationSystem:
     def start_mapping(self, map_name, live_grid, semantic_objects, pose, map_id=None):
         current_map = self._create_empty_map(map_name, live_grid, map_id=map_id)
         self.update_static_landmarks(current_map, semantic_objects)
+        current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
         self.state.update({
@@ -212,8 +241,9 @@ class SpatialMemoryNavigationSystem:
         current_map = self.state.get("current_map")
         if not current_map:
             return None
-        current_map["static_grid"] = self._normalize_grid(live_grid)
+        current_map["static_grid"] = self._merge_static_grid(current_map.get("static_grid"), live_grid)
         self.update_static_landmarks(current_map, semantic_objects)
+        current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
         return current_map
@@ -240,7 +270,7 @@ class SpatialMemoryNavigationSystem:
 
     def list_maps(self):
         maps = []
-        for path in sorted(self.maps_dir.glob("*.json")):
+        for path in sorted(self.maps_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
             if path.name == self.map_graph_path.name:
                 continue
             try:
@@ -251,6 +281,8 @@ class SpatialMemoryNavigationSystem:
                 "map_id": data.get("map_id"),
                 "map_name": data.get("map_name"),
                 "created_at": data.get("created_at"),
+                "saved_at": path.stat().st_mtime,
+                "file_name": path.name,
                 "landmark_count": len(data.get("landmarks", [])),
                 "coverage_percent": data.get("metadata", {}).get("coverage_percent", 0.0),
             })

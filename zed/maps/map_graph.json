@@ -2,5 +2,33 @@
   "bedroom_1780550496": {
     "name": "Bedroom",
     "exits": []
+  },
+  "room_1_1780570462": {
+    "name": "Room 1",
+    "exits": []
+  },
+  "room_1780576605": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780576615": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780577106": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780577773": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780579465": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780580798": {
+    "name": "Room",
+    "exits": []
   }
 }

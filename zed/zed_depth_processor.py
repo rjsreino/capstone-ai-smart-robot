@@ -8,6 +8,7 @@ Compatible with ZED 1 cameras connected via USB 2.0 (720p @ 15fps).
 import cv2
 import pyzed.sl as sl
 import numpy as np
+import os
 from typing import Tuple, Optional, Dict
 import time
 from dataclasses import dataclass
@@ -152,15 +153,27 @@ class ZedDepthProcessor:
         print(f"  Depth Mode: {self.config.depth_mode}")
         print(f"  Depth Range: {self.config.min_depth}-{self.config.max_depth}mm")
         
-        # Enable Positional Tracking / SLAM
-        tracking_params = sl.PositionalTrackingParameters()
-        status_tracking = self.zed.enable_positional_tracking(tracking_params)
-        if status_tracking == sl.ERROR_CODE.SUCCESS:
-            self.positional_tracking_enabled = True
-            print("[ZedDepthProcessor] SLAM Positional Tracking enabled successfully.")
+        # Enable Positional Tracking / SLAM only when explicitly requested.
+        # ZED 1 can spam keyframe-memory errors during long scans; our saved
+        # spatial memory is handled separately in zed/maps, so tracking is
+        # optional for the live demo path.
+        tracking_requested = os.getenv("VICKY_ZED_TRACKING", "0").strip().lower() in {"1", "true", "yes"}
+        if tracking_requested:
+            tracking_params = sl.PositionalTrackingParameters()
+            if hasattr(tracking_params, "enable_area_memory"):
+                tracking_params.enable_area_memory = os.getenv("VICKY_ZED_AREA_MEMORY", "0").strip().lower() in {"1", "true", "yes"}
+            if hasattr(tracking_params, "enable_pose_smoothing"):
+                tracking_params.enable_pose_smoothing = True
+            status_tracking = self.zed.enable_positional_tracking(tracking_params)
+            if status_tracking == sl.ERROR_CODE.SUCCESS:
+                self.positional_tracking_enabled = True
+                print("[ZedDepthProcessor] SLAM Positional Tracking enabled successfully.")
+            else:
+                self.positional_tracking_enabled = False
+                print(f"[ZedDepthProcessor WARNING] Failed to enable positional tracking: {status_tracking}")
         else:
             self.positional_tracking_enabled = False
-            print(f"[ZedDepthProcessor WARNING] Failed to enable positional tracking: {status_tracking}")
+            print("[ZedDepthProcessor] ZED positional tracking disabled (set VICKY_ZED_TRACKING=1 to enable).")
         
     def stop(self):
         """Stop ZED camera connection"""
