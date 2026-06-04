@@ -1,0 +1,36 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "door_local",
+      "points": [
+        [
+          355.05084745762707,
+          96.89830508474574
+        ],
+        [
+          520.3050847457627,
+          31.64406779661016
+        ],
+        [
+          564.3728813559322,
+          374.864406779661
+        ],
+        [
+          394.88135593220335,
+          371.47457627118644
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "polygon",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "WIN_20260604_17_11_31_Pro.jpg",
+  "imageData": null,
+  "imageHeight": 376,
+  "imageWidth": 1344
+}

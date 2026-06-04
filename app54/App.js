@@ -19,7 +19,7 @@ import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import { DeviceMotion } from "expo-sensors";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Circle, Line, Polygon } from "react-native-svg";
+import Svg, { Circle, Line, Polygon, Rect } from "react-native-svg";
 import { WebView } from "react-native-webview";
 
 const RECORDING_OPTIONS = {
@@ -55,11 +55,59 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState("");
   const [history, setHistory] = useState([]);
+  const [savedMaps, setSavedMaps] = useState([]);
+  const [currentMap, setCurrentMap] = useState(null);
+  const [mapActionStatus, setMapActionStatus] = useState("");
 
   const lastSpoken = useRef("");
   const lastSpeakTime = useRef(0);
   const lastCommandTime = useRef(0);
   const guidanceEnabledRef = useRef(true);
+
+  const speakText = async (text, options = {}) => {
+    if (!text) return;
+    try {
+      const speaking = Speech.isSpeakingAsync
+        ? await Speech.isSpeakingAsync()
+        : false;
+      if (speaking && !options.interrupt) return;
+      if (options.interrupt) {
+        await Speech.stop();
+      }
+      Speech.speak(text, {
+        language: "en-US",
+        rate: 0.9,
+        pitch: 1.0,
+        volume: 1.0,
+      });
+    } catch (error) {
+      console.log("Speech error:", error);
+    }
+  };
+
+  useEffect(() => {
+  if (!serverUrl) return;
+
+  const fetchAutopilot = async () => {
+    try {
+      const response = await fetch(`${serverUrl}/autopilot-guidance`);
+      const json = await response.json();
+
+      if (!json.active || !json.guidance) return;
+      if (json.guidance === lastSpoken.current) return;
+
+      lastSpoken.current = json.guidance;
+
+      await speakText(json.guidance);
+    } catch (error) {
+      console.log("Autopilot guidance error:", error);
+    }
+  };
+
+  const interval = setInterval(fetchAutopilot, 1200);
+
+  return () => clearInterval(interval);
+}, [serverUrl]);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const scanAnim = useRef(new Animated.Value(0)).current;
@@ -292,15 +340,8 @@ export default function App() {
 
       lastCommandTime.current = Date.now();
 
-      await Speech.stop();
-      await new Promise((resolve) => setTimeout(resolve, 1600));
-
-      Speech.speak(answer, {
-        language: "en-US",
-        rate: 0.9,
-        pitch: 1.0,
-        volume: 1.0,
-      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await speakText(answer, { interrupt: true });
     } catch (error) {
       console.log("Stop recording error:", error);
     } finally {
@@ -330,17 +371,8 @@ export default function App() {
     lastSpoken.current = message;
     lastSpeakTime.current = Date.now();
 
-    Speech.isSpeakingAsync().then((speaking) => {
-      if (!speaking) {
-        Speech.speak(message, {
-          language: "en-US",
-          rate: 0.9,
-          pitch: 1.0,
-          volume: 1.0,
-        });
-      }
-    });
-  };
+    speakText(message);
+  }
 
   const sendCommand = async () => {
     const userCommand = command.trim();
@@ -365,8 +397,6 @@ export default function App() {
 
       lastCommandTime.current = Date.now();
 
-      await Speech.stop();
-
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
@@ -375,18 +405,63 @@ export default function App() {
         playThroughEarpieceAndroid: false,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      Speech.speak(answer, {
-        language: "en-US",
-        rate: 0.9,
-        pitch: 1.0,
-        volume: 1.0,
-      });
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      await speakText(answer, { interrupt: true });
     } catch (error) {
       console.log("Command error:", error);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const postJson = async (path, body = {}) => {
+    const response = await fetch(`${serverUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const json = await response.json();
+    if (!response.ok) {
+      throw new Error(json.detail || json.message || `Request failed: ${response.status}`);
+    }
+    return json;
+  };
+
+  const refreshMapState = async () => {
+    if (!serverUrl) return;
+    try {
+      const [mapsResponse, currentResponse] = await Promise.all([
+        fetch(`${serverUrl}/maps`),
+        fetch(`${serverUrl}/current-map`),
+      ]);
+      const mapsJson = await mapsResponse.json();
+      const currentJson = await currentResponse.json();
+      setSavedMaps(mapsJson.maps || []);
+      setCurrentMap(currentJson.active ? currentJson.map : null);
+    } catch (error) {
+      console.log("Map state error:", error);
+    }
+  };
+
+  const runMapAction = async (path, body = {}) => {
+    try {
+      const label = path.replace("/", "").replace("-", " ");
+      setMapActionStatus(`${label}...`);
+      const json = await postJson(path, body);
+      const answer = path === "/save-map" && json.map_id
+        ? `Map saved as ${json.file_name || `${json.map_id}.json`} with ${json.landmark_count ?? 0} landmarks and ${json.grid_counts?.occupied ?? 0} obstacle cells.`
+        : json.message || json.status || json.response || "Done.";
+      setMapActionStatus(answer);
+      setLastResponse(answer);
+      addHistory(path, answer);
+      await speakText(answer, { interrupt: true });
+      await refreshMapState();
+    } catch (error) {
+      console.log("Map action error:", error);
+      const message = error?.message || "Map action failed.";
+      setMapActionStatus(message);
+      setLastResponse(message);
+      await speakText(message, { interrupt: true });
     }
   };
 
@@ -410,10 +485,37 @@ export default function App() {
     return () => clearInterval(interval);
   }, [serverUrl]);
 
+  useEffect(() => {
+    refreshMapState();
+    const interval = setInterval(refreshMapState, 5000);
+    return () => clearInterval(interval);
+  }, [serverUrl]);
+
   const left = data?.left_distance ?? 0;
   const center = data?.center_distance ?? 0;
   const right = data?.right_distance ?? 0;
   const guidanceColor = getGuidanceColor();
+  const spatialMemory = data?.spatial_memory || {};
+  const liveObjects = data?.objects || [];
+  const mapGrid = spatialMemory.mode === "mapping"
+    ? data?.map || currentMap?.static_grid || []
+    : currentMap?.static_grid || data?.map || [];
+  const mapLandmarks = currentMap?.landmarks || [];
+  const mapSampleSize = 20;
+  const mapCells = [];
+
+  if (Array.isArray(mapGrid) && mapGrid.length) {
+    const rowStep = Math.max(1, Math.floor(mapGrid.length / mapSampleSize));
+    const colStep = Math.max(1, Math.floor((mapGrid[0]?.length || 100) / mapSampleSize));
+    for (let row = 0; row < mapSampleSize; row += 1) {
+      for (let col = 0; col < mapSampleSize; col += 1) {
+        const sourceRow = Math.min(row * rowStep, mapGrid.length - 1);
+        const sourceCol = Math.min(col * colStep, (mapGrid[sourceRow]?.length || 1) - 1);
+        const value = Number(mapGrid[sourceRow]?.[sourceCol] || 0);
+        mapCells.push({ row, col, value });
+      }
+    }
+  }
 
   const scanTranslate = scanAnim.interpolate({
     inputRange: [0, 1],
@@ -525,9 +627,124 @@ export default function App() {
 
         </View>
 
-        {/* Embedded SLAM grid & A* visualizer */}
         <View style={styles.mapCard}>
-          <Text style={styles.panelLabel}>LIVE SLAM OCCUPANCY MAP</Text>
+          <View style={styles.mapHeader}>
+            <View>
+              <Text style={styles.panelLabel}>ROOM MAP</Text>
+              <Text style={styles.mapTitle}>
+                {spatialMemory.current_map_name || currentMap?.map_name || "No active map"}
+              </Text>
+            </View>
+            <View style={styles.modePill}>
+              <Text style={styles.modeText}>{(spatialMemory.mode || "idle").toUpperCase()}</Text>
+            </View>
+          </View>
+
+          <View style={styles.mapStatsRow}>
+            <View style={styles.mapStat}>
+              <Text style={styles.mapStatValue}>{spatialMemory.landmark_count ?? mapLandmarks.length}</Text>
+              <Text style={styles.mapStatLabel}>LANDMARKS</Text>
+            </View>
+            <View style={styles.mapStat}>
+              <Text style={styles.mapStatValue}>{liveObjects.length}</Text>
+              <Text style={styles.mapStatLabel}>LIVE OBJECTS</Text>
+            </View>
+            <View style={styles.mapStat}>
+              <Text style={styles.mapStatValue}>{isConnected ? "ON" : "OFF"}</Text>
+              <Text style={styles.mapStatLabel}>SERVER</Text>
+            </View>
+          </View>
+
+          <View style={styles.nativeMapFrame}>
+            <Svg width="100%" height="100%" viewBox="0 0 100 100">
+              <Rect x="0" y="0" width="100" height="100" fill="#020617" />
+              {mapCells.map((cell, index) => {
+                const fill =
+                  cell.value === 1 ? "#ef4444" :
+                  cell.value === 2 ? "#1e293b" :
+                  cell.value > 0 ? "#facc15" :
+                  "#0f172a";
+                return (
+                  <Rect
+                    key={`cell-${index}`}
+                    x={cell.col * 5}
+                    y={cell.row * 5}
+                    width="4.6"
+                    height="4.6"
+                    fill={fill}
+                    opacity={cell.value === 0 ? 0.55 : 0.9}
+                  />
+                );
+              })}
+              {mapLandmarks.map((landmark, index) => (
+                <Circle
+                  key={`landmark-${landmark.id || index}`}
+                  cx={Number(landmark.grid_x ?? 50)}
+                  cy={Number(landmark.grid_z ?? 50)}
+                  r="2.4"
+                  fill={String(landmark.type || "").includes("exit") ? "#22f59c" : "#facc15"}
+                  stroke="#f8fafc"
+                  strokeWidth="0.5"
+                />
+              ))}
+              {liveObjects.map((object, index) => {
+                const label = String(object.label || object.detected_label || "").toLowerCase();
+                const isExit = label.includes("exit");
+                const isDoor = label.includes("door");
+                const fill = isExit ? "#22f59c" : isDoor ? "#facc15" : "#fb7185";
+                return (
+                  <Circle
+                    key={`live-object-${index}`}
+                    cx={Number(object.x ?? 50)}
+                    cy={Number(object.z ?? 50)}
+                    r={isExit || isDoor ? "2.8" : "2.1"}
+                    fill={fill}
+                    stroke="#f8fafc"
+                    strokeWidth="0.45"
+                  />
+                );
+              })}
+              <Circle cx="50" cy="50" r="2.6" fill="#38bdf8" stroke="#e0f2fe" strokeWidth="0.8" />
+            </Svg>
+          </View>
+
+          <View style={styles.legendRow}>
+            <Text style={styles.legendText}>Blue: user</Text>
+            <Text style={styles.legendText}>Yellow/green: landmark</Text>
+            <Text style={styles.legendText}>Pink: live object</Text>
+          </View>
+
+          <View style={styles.mapActions}>
+            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-mapping", { map_name: "Room" })}>
+              <Text style={styles.mapActionText}>START MAP</Text>
+            </Pressable>
+            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/save-map")}>
+              <Text style={styles.mapActionText}>SAVE</Text>
+            </Pressable>
+            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-navigation", { goal_type: "exit" })}>
+              <Text style={styles.mapActionText}>FIND EXIT</Text>
+            </Pressable>
+          </View>
+
+          {!!mapActionStatus && (
+            <Text style={styles.mapActionStatus}>{mapActionStatus}</Text>
+          )}
+
+          {savedMaps.slice(0, 3).map((item) => (
+            <View key={item.map_id} style={styles.savedMapRow}>
+              <View>
+                <Text style={styles.savedMapName}>{item.map_name}</Text>
+                <Text style={styles.savedMapMeta}>
+                  {item.landmark_count} landmarks | {Number(item.coverage_percent || 0).toFixed(1)}% coverage
+                </Text>
+              </View>
+              <Pressable style={styles.loadButton} onPress={() => runMapAction("/load-map", { map_id: item.map_id })}>
+                <Text style={styles.loadText}>LOAD</Text>
+              </Pressable>
+            </View>
+          ))}
+
+          <Text style={styles.panelLabel}>DEBUG WEB MAP</Text>
           <View style={styles.webViewContainer}>
             <WebView
               source={{ uri: `${serverUrl}/map?embed=true` }}
@@ -1067,6 +1284,134 @@ const styles = StyleSheet.create({
     fontSize: 14,
     borderWidth: 1,
     borderColor: "#334155",
+  },
+  mapHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  mapTitle: {
+    color: "#f8fafc",
+    fontSize: 20,
+    fontWeight: "900",
+  },
+  modePill: {
+    backgroundColor: "#1e293b",
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#38bdf8",
+  },
+  modeText: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 1,
+  },
+  mapStatsRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+    marginBottom: 14,
+  },
+  mapStat: {
+    flex: 1,
+    backgroundColor: "#0f172a",
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+  },
+  mapStatValue: {
+    color: "#f8fafc",
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  mapStatLabel: {
+    color: "#64748b",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 1,
+    marginTop: 4,
+  },
+  nativeMapFrame: {
+    height: 260,
+    borderRadius: 18,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#334155",
+    backgroundColor: "#020617",
+  },
+  legendRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginTop: 10,
+    marginBottom: 14,
+  },
+  legendText: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  mapActions: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 12,
+  },
+  mapActionButton: {
+    flex: 1,
+    backgroundColor: "#1d4ed8",
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  mapActionText: {
+    color: "#f8fafc",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
+  mapActionStatus: {
+    color: "#7dd3fc",
+    fontSize: 13,
+    fontWeight: "800",
+    marginBottom: 12,
+    lineHeight: 18,
+  },
+  savedMapRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    backgroundColor: "#0f172a",
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+  },
+  savedMapName: {
+    color: "#e2e8f0",
+    fontWeight: "900",
+    fontSize: 14,
+  },
+  savedMapMeta: {
+    color: "#94a3b8",
+    fontSize: 12,
+    marginTop: 3,
+  },
+  loadButton: {
+    backgroundColor: "#334155",
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  loadText: {
+    color: "#f8fafc",
+    fontSize: 11,
+    fontWeight: "900",
   },
   webViewContainer: {
     alignSelf: "stretch",

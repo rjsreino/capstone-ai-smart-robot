@@ -61,7 +61,24 @@ from llm_reasoner import ask_llm
 # ==========================================
 # CONSTANTS & CONFIGURATION
 # ==========================================
-MODEL_PATH = "yolov8n.pt"
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COCO_MODEL_PATH = "yolov8n.pt"
+DEFAULT_LANDMARK_MODEL_PATHS = (
+    "runs/detect/exit_sign_only/weights/best.pt;"
+    "runs/detect/exit_sign_only_v2/weights/best.pt;"
+    "runs/detect/door_local_v1/weights/best.pt"
+)
+LANDMARK_MODEL_PATHS = [
+    path.strip()
+    for path in os.getenv("VICKY_YOLO_MODEL", DEFAULT_LANDMARK_MODEL_PATHS).replace(",", ";").split(";")
+    if path.strip()
+]
+COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.20"))
+COCO_IMAGE_SIZE = int(os.getenv("VICKY_COCO_IMGSZ", "320"))
+LANDMARK_CONFIDENCE = float(os.getenv("VICKY_LANDMARK_CONF", "0.10"))
+LANDMARK_IMAGE_SIZE = int(os.getenv("VICKY_LANDMARK_IMGSZ", "640"))
+EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.45"))
+EXIT_SIGN_MAX_AREA_RATIO = float(os.getenv("VICKY_EXIT_SIGN_MAX_AREA", "0.12"))
 MIC_INDEX = -1             # -1 for auto-detect microphone index
 SD_WAKE_DEVICE_INDEX = -1    # -1 for default sounddevice device index
 WAKEWORD_NAME = "jarvis"
@@ -98,8 +115,62 @@ ALLOWED_CLASSES = {
     "person", "chair", "couch", "bench", "dining table",
     "bottle", "backpack", "potted plant", "cell phone", "cup",
     "laptop", "book", "handbag", "suitcase", "bed", "tv",
-    "keyboard", "mouse", "remote"
+    "keyboard", "mouse", "remote",
+    "door", "open door", "closed door", "doorway", "door local", "exit sign",
+    "open_door", "closed_door", "door_local", "exit_sign"
 }
+
+STATIC_NAVIGATION_LABELS = {
+    "door": "door",
+    "open door": "doorway",
+    "open_door": "doorway",
+    "closed door": "door",
+    "closed_door": "door",
+    "doorway": "doorway",
+    "door local": "doorway",
+    "door_local": "doorway",
+    "exit sign": "exit sign",
+    "exit_sign": "exit sign",
+}
+
+
+def normalize_detection_label(label: str) -> str:
+    return str(label or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def looks_like_exit_sign(frame: np.ndarray, box: tuple[int, int, int, int]) -> bool:
+    x1, y1, x2, y2 = box
+    h, w = frame.shape[:2]
+    x1, x2 = max(0, x1), min(w, x2)
+    y1, y2 = max(0, y1), min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        return False
+
+    roi = frame[y1:y2, x1:x2]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    green_mask = cv2.inRange(hsv, np.array([35, 45, 45]), np.array([90, 255, 255]))
+    yellow_mask = cv2.inRange(hsv, np.array([15, 60, 80]), np.array([38, 255, 255]))
+    sign_color_ratio = float(cv2.countNonZero(green_mask | yellow_mask)) / max(roi.shape[0] * roi.shape[1], 1)
+
+    return sign_color_ratio >= 0.025
+
+
+def resolve_model_path(model_path: str) -> str:
+    if os.path.isabs(model_path) or model_path == COCO_MODEL_PATH:
+        return model_path
+
+    cwd_path = os.path.abspath(model_path)
+    if os.path.exists(cwd_path):
+        return cwd_path
+
+    project_path = os.path.join(PROJECT_ROOT, model_path)
+    if os.path.exists(project_path):
+        return project_path
+
+    return model_path
 
 # Cooldown and threshold configurations
 GLOBAL_COOLDOWN = 2.5
@@ -597,10 +668,19 @@ def vision_loop():
         running = False
         return
 
-    # Initialize YOLO Model
-    print("[YOLO] Loading model YOLOv8n...")
-    model = YOLO(MODEL_PATH)
-    model.to(device)
+    # Initialize YOLO models. COCO remains active for safety objects; custom model adds semantic landmarks.
+    print(f"[YOLO] Loading COCO safety model: {COCO_MODEL_PATH}")
+    coco_model = YOLO(COCO_MODEL_PATH)
+    coco_model.to(device)
+    detection_models = [("coco", coco_model)]
+
+    for index, landmark_model_path in enumerate(LANDMARK_MODEL_PATHS, start=1):
+        resolved_landmark_model_path = resolve_model_path(landmark_model_path)
+        print(f"[YOLO] Loading landmark model {index}: {resolved_landmark_model_path}")
+        landmark_model = YOLO(resolved_landmark_model_path)
+        landmark_model.to(device)
+        detection_models.append((f"landmark_{index}", landmark_model))
+
     print(f"[YOLO] Running on device: {device}")
 
     prev_time = time.time()
@@ -609,7 +689,13 @@ def vision_loop():
     last_exit_announce_time = 0.0
     persistent_exit_signs = {}
 
-    cv2.namedWindow("ZED Spatial Live Vision Assistant")
+    display_enabled = os.getenv("VICKY_ENABLE_DISPLAY", "1").strip().lower() not in {"0", "false", "no"}
+    if display_enabled:
+        try:
+            cv2.namedWindow("ZED Spatial Live Vision Assistant")
+        except cv2.error as e:
+            print(f"[VISION] OpenCV display unavailable; continuing headless: {e}")
+            display_enabled = False
 
     while running:
         # Check if map reset is requested
@@ -664,14 +750,6 @@ def vision_loop():
                         guidance_color = (255, 128, 0)
 
         # 2. YOLO Object Detection
-        results = model(
-            rgb_frame,
-            conf=0.20,
-            imgsz=320,
-            device=device,
-            verbose=False
-        )
-        result = results[0]
         annotated = rgb_frame.copy()
         
         h, w, _ = rgb_frame.shape
@@ -684,96 +762,125 @@ def vision_loop():
         yaw_rad = np.radians(processor.yaw)
         fov_rad = np.radians(90.0)
 
-        if result.boxes is not None and len(result.boxes) > 0:
+        for model_source, model in detection_models:
+            is_landmark_model = model_source.startswith("landmark")
+            confidence = LANDMARK_CONFIDENCE if is_landmark_model else COCO_CONFIDENCE
+            image_size = LANDMARK_IMAGE_SIZE if is_landmark_model else COCO_IMAGE_SIZE
+            results = model(
+                rgb_frame,
+                conf=confidence,
+                imgsz=image_size,
+                device=device,
+                verbose=False
+            )
+            result = results[0]
+
+            if result.boxes is None or len(result.boxes) == 0:
+                continue
+
             for box in result.boxes:
-                cls_id = int(box.cls[0].item())
-                conf = float(box.conf[0].item())
-                x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    cls_id = int(box.cls[0].item())
+                    conf = float(box.conf[0].item())
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
 
-                class_name = model.names[cls_id].lower()
-                if class_name not in ALLOWED_CLASSES:
-                    continue
+                    class_name = normalize_detection_label(model.names[cls_id])
+                    if class_name not in ALLOWED_CLASSES:
+                        continue
 
-                box_area = max(0, x2 - x1) * max(0, y2 - y1)
-                area_ratio = box_area / frame_area
+                    box_area = max(0, x2 - x1) * max(0, y2 - y1)
+                    area_ratio = box_area / frame_area
 
-                if area_ratio < 0.03:
-                    continue
-                if class_name == "person" and area_ratio < 0.10:
-                    continue
+                    min_area_ratio = 0.01 if is_landmark_model else 0.03
+                    if area_ratio < min_area_ratio:
+                        continue
+                    if class_name == "person" and area_ratio < 0.10:
+                        continue
+                    if class_name == "exit sign":
+                        if conf < EXIT_SIGN_CONFIDENCE:
+                            continue
+                        if area_ratio > EXIT_SIGN_MAX_AREA_RATIO:
+                            continue
+                        if not looks_like_exit_sign(rgb_frame, (x1, y1, x2, y2)):
+                            continue
 
-                # Compute depth distance of bounding box center
-                center_x = max(0, min(int((x1 + x2) / 2), w - 1))
-                center_y = max(0, min(int((y1 + y2) / 2), h - 1))
+                    # Compute depth distance of bounding box center
+                    center_x = max(0, min(int((x1 + x2) / 2), w - 1))
+                    center_y = max(0, min(int((y1 + y2) / 2), h - 1))
 
-                depth_val_mm = depth_frame[center_y, center_x]
-                depth_distance = None
+                    depth_val_mm = depth_frame[center_y, center_x]
+                    depth_distance = None
 
-                if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
-                    depth_distance = float(depth_val_mm) / 1000.0  # mm to meters
+                    if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
+                        depth_distance = float(depth_val_mm) / 1000.0  # mm to meters
 
-                if depth_distance is not None:
-                    # Project object onto 2D grid coordinates (invert sign to fix mirroring)
-                    angle_rad = -fov_rad/2.0 + center_x * (fov_rad / w)
-                    x_c = -depth_distance * np.sin(angle_rad)
-                    z_c = depth_distance * np.cos(angle_rad)
-                    x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                    z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                    grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
-                    grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
-                    temp_semantic_objects.append({
-                        "label": class_name,
-                        "x": grid_x,
-                        "z": grid_z,
-                        "distance": depth_distance
+                    if depth_distance is not None:
+                        # Project object onto 2D grid coordinates (invert sign to fix mirroring)
+                        angle_rad = -fov_rad/2.0 + center_x * (fov_rad / w)
+                        x_c = -depth_distance * np.sin(angle_rad)
+                        z_c = depth_distance * np.cos(angle_rad)
+                        x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
+                        z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
+                        grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
+                        grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
+                        semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+                        temp_semantic_objects.append({
+                            "label": semantic_label,
+                            "detected_label": class_name,
+                            "source_model": model_source,
+                            "x": grid_x,
+                            "z": grid_z,
+                            "distance": depth_distance,
+                            "confidence": conf,
+                        })
+
+                        if depth_distance < 0.8:
+                            distance_lbl = "very close"
+                        elif depth_distance < 1.5:
+                            distance_lbl = "close"
+                        elif depth_distance < 3.0:
+                            distance_lbl = "medium"
+                        else:
+                            distance_lbl = "far"
+                    else:
+                        # Fallback to area-ratio based distance label
+                        if area_ratio > 0.18:
+                            distance_lbl = "very close"
+                        elif area_ratio > 0.10:
+                            distance_lbl = "close"
+                        elif area_ratio > 0.05:
+                            distance_lbl = "medium"
+                        else:
+                            distance_lbl = "far"
+
+                    position = get_position_label(center_x, w)
+
+                    detections.append({
+                        "class_name": class_name,
+                        "confidence": conf,
+                        "position": position,
+                        "distance": distance_lbl,
+                        "area_ratio": area_ratio,
+                        "box": (x1, y1, x2, y2),
+                        "depth_meters": depth_distance,
+                        "source_model": model_source,
                     })
 
-                    if depth_distance < 0.8:
-                        distance_lbl = "very close"
-                    elif depth_distance < 1.5:
-                        distance_lbl = "close"
-                    elif depth_distance < 3.0:
-                        distance_lbl = "medium"
-                    else:
-                        distance_lbl = "far"
-                else:
-                    # Fallback to area-ratio based distance label
-                    if area_ratio > 0.18:
-                        distance_lbl = "very close"
-                    elif area_ratio > 0.10:
-                        distance_lbl = "close"
-                    elif area_ratio > 0.05:
-                        distance_lbl = "medium"
-                    else:
-                        distance_lbl = "far"
+                    # Draw YOLO bounding box & distance label
+                    box_color = (0, 180, 255) if is_landmark_model else (0, 0, 255)
+                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
+                    label = f"{class_name} | {position} | {distance_lbl}"
+                    if depth_distance is not None:
+                        label += f" | {depth_distance:.1f}m"
 
-                position = get_position_label(center_x, w)
-
-                detections.append({
-                    "class_name": class_name,
-                    "confidence": conf,
-                    "position": position,
-                    "distance": distance_lbl,
-                    "area_ratio": area_ratio,
-                    "box": (x1, y1, x2, y2),
-                    "depth_meters": depth_distance,
-                })
-
-                # Draw YOLO bounding box & distance label
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                label = f"{class_name} | {position} | {distance_lbl}"
-                if depth_distance is not None:
-                    label += f" | {depth_distance:.1f}m"
-
-                cv2.putText(
-                    annotated,
-                    label,
-                    (x1, max(y1 - 10, 25)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.55,
-                    (255, 255, 255),
-                    2
-                )
+                    cv2.putText(
+                        annotated,
+                        label,
+                        (x1, max(y1 - 10, 25)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (255, 255, 255),
+                        2
+                    )
 
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
 
@@ -908,6 +1015,24 @@ def vision_loop():
 
         # Thread-safe global update
         with frame_lock:
+            live_grid = processor.occupancy_grid.copy()
+            for obj in temp_semantic_objects:
+                label = str(obj.get("label") or obj.get("detected_label") or "").lower()
+                if label == "person":
+                    continue
+                gx = obj.get("x")
+                gz = obj.get("z")
+                if gx is None or gz is None:
+                    continue
+                gx = max(0, min(int(gx), 99))
+                gz = max(0, min(int(gz), 99))
+                marker = 2 if ("door" in label or "exit" in label) else 1
+                for dz in range(-1, 2):
+                    for dx in range(-1, 2):
+                        nz = max(0, min(gz + dz, 99))
+                        nx = max(0, min(gx + dx, 99))
+                        live_grid[nz, nx] = marker
+
             latest_detections = detections
             latest_frame = rgb_frame.copy()
             latest_depth_map = depth_frame.copy()
@@ -920,7 +1045,7 @@ def vision_loop():
                     "pitch": float(processor.pitch),
                     "yaw": float(processor.yaw)
                 }
-                occupancy_grid = processor.occupancy_grid.tolist()
+                occupancy_grid = live_grid.tolist()
                 semantic_objects = temp_semantic_objects
 
         # 3. Proactive Auto Announcement
@@ -999,23 +1124,25 @@ def vision_loop():
         cv2.putText(hud, f"Safe Distance: {safe_distance_threshold:.0f} mm", (hud_w - 280, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(hud, "Adjust: [+] / [-] keys", (hud_w - 280, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA)
 
-        dashboard = np.vstack((main_panels, hud))
-        cv2.imshow("ZED Spatial Live Vision Assistant", dashboard)
+        if display_enabled:
+            dashboard = np.vstack((main_panels, hud))
+            cv2.imshow("ZED Spatial Live Vision Assistant", dashboard)
 
-        # Keyboard Interventions
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27 or key == ord('q'):
-            running = False
-            break
-        elif key == ord('+') or key == ord('='):
-            safe_distance_threshold = min(4000.0, safe_distance_threshold + 100)
-            print(f"[SETTING] Increased Safe Distance Threshold to {safe_distance_threshold:.0f}mm")
-        elif key == ord('-') or key == ord('_'):
-            safe_distance_threshold = max(500.0, safe_distance_threshold - 100)
-            print(f"[SETTING] Decreased Safe Distance Threshold to {safe_distance_threshold:.0f}mm")
+            # Keyboard Interventions
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27 or key == ord('q'):
+                running = False
+                break
+            elif key == ord('+') or key == ord('='):
+                safe_distance_threshold = min(4000.0, safe_distance_threshold + 100)
+                print(f"[SETTING] Increased Safe Distance Threshold to {safe_distance_threshold:.0f}mm")
+            elif key == ord('-') or key == ord('_'):
+                safe_distance_threshold = max(500.0, safe_distance_threshold - 100)
+                print(f"[SETTING] Decreased Safe Distance Threshold to {safe_distance_threshold:.0f}mm")
 
     processor.stop()
-    cv2.destroyAllWindows()
+    if display_enabled:
+        cv2.destroyAllWindows()
     print("[VISION] Vision pipeline loop ended cleanly.")
 
 # ==========================================

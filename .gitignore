@@ -25,6 +25,8 @@ ENV/
 logs/
 *.log
 nav_logs/
+*.db
+*.cache
 
 # Build artifacts
 *.whl
@@ -49,6 +51,11 @@ Thumbs.db
 
 # Offload directory (if contains temporary files)
 offload/
+
+# Training outputs are mostly generated artifacts. Commit selected model weights
+# explicitly with git add -f when they are required for demos.
+runs/
+yolo26n.pt
 
 api/
 # Piper TTS voice models (download separately)
