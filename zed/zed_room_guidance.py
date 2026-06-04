@@ -30,22 +30,20 @@ def on_guidance_update(command: str, zones_data: Dict[str, float], safe_dist: fl
     - Local Text-To-Speech (TTS) library or server API
     - Robot velocity command publisher (ROS/Serial)
     """
-    # Example printed guidance logs:
-    # Print only when command changes or at a throttled rate
     now = time.time()
     if not hasattr(on_guidance_update, "last_print_time"):
         on_guidance_update.last_print_time = 0
         on_guidance_update.last_cmd = ""
         
     if command != on_guidance_update.last_cmd or (now - on_guidance_update.last_print_time) > 2.0:
-        print(f"[GUIDANCE] Command: {command:<12} | L: {zones_data['left']:.0f}mm | C: {zones_data['center']:.0f}mm | R: {zones_data['right']:.0f}mm (Safe Thresh: {safe_dist:.0f}mm)")
+        print(f"[GUIDANCE] Command: {command:<14} | L: {zones_data['left']:.0f}mm | C: {zones_data['center']:.0f}mm | R: {zones_data['right']:.0f}mm (Safe Thresh: {safe_dist:.0f}mm)")
         on_guidance_update.last_print_time = now
         on_guidance_update.last_cmd = command
 
 
 def main():
     print("=" * 60)
-    print("        ZED 1 SPATIAL ROOM GUIDANCE SYSTEM")
+    print("        ZED 1 SPATIAL ROOM GUIDANCE SYSTEM (PROACTIVE)")
     print("=" * 60)
     print("Keyboard Controls:")
     print("  'q' : Quit application")
@@ -65,6 +63,7 @@ def main():
     
     # Safe distance threshold parameters
     safe_distance_threshold = 1200.0  # Default safe distance in millimeters (1.2 meters)
+    CRITICAL_STOP_DIST = 500.0        # 50cm danger close
     
     try:
         processor = ZedDepthProcessor(config)
@@ -82,7 +81,6 @@ def main():
         while True:
             # Grab frame
             if not processor.grab_frame():
-                # If grab fails, sleep briefly and continue
                 time.sleep(0.01)
                 continue
                 
@@ -104,43 +102,44 @@ def main():
             center_dist = zones['center']['median']
             right_dist = zones['right']['median']
             
-            # Determine guidance instruction
-            # Logic:
-            # 1. If center is clear (> safe_distance_threshold), check if we can go forward.
-            # 2. If center is blocked:
-            #    - Check if left is clear.
-            #    - Check if right is clear.
-            #    - Turn towards the direction with more clearance.
-            # 3. If all sides are blocked under a critical threshold, command STOP.
-            
-            CRITICAL_STOP_DIST = 500.0  # 50cm danger close
-            
-            # Check for Doorway / Frontier Peak state
-            gdm = zones.get('global_depth_max')
+            # ----------------------------------------------------
+            # PROACTIVE LANDMARK & DOORWAY SEEKING LOGIC ENGINE
+            # ----------------------------------------------------
             is_doorway = False
-            if gdm:
+            
+            # Algorithm 1: Dynamic Lateral Discontinuity Profiling
+            # Checks if the center channel forms a deep longitudinal penetration corridor 
+            # flanked on both sides by prominent wall structures or tight obstacles.
+            if center_dist > 1600.0: # Ensure path goes deep into the scene
+                if center_dist > (left_dist * 1.5) and center_dist > (right_dist * 1.5):
+                    # Confirms that left and right are significantly tighter boundaries than center
+                    is_doorway = True
+            
+            # Algorithm 2: Fallback Global Depth Maximum Dictionary Parse
+            # Leverages structural telemetry structures tracking frontier peaks if populated
+            gdm = zones.get('global_depth_max') if isinstance(zones, dict) else None
+            if not is_doorway and gdm:
                 val = gdm.get('value', 0.0)
                 left_anomaly = gdm.get('left_wall_anomaly_mm', 0.0)
                 right_anomaly = gdm.get('right_wall_anomaly_mm', 0.0)
-                # Check if values match the doorway/frontier peak state
-                if (1800.0 <= val <= 2200.0 and 
-                    400.0 <= left_anomaly <= 550.0 and 
-                    700.0 <= right_anomaly <= 900.0 and
-                    gdm.get('zone') == 'center'):
-                    is_doorway = True
+                
+                # Dynamic validation bounds to prevent rigid framework matching failures
+                if val > 1600.0 and left_anomaly < 1000.0 and right_anomaly < 1100.0:
+                    if gdm.get('zone') == 'center':
+                        is_doorway = True
 
+            # State Machine Direction Mapping
             if is_doorway:
                 cmd_text = "ENTER DOORWAY"
-                cmd_color = (0, 255, 0)  # Green
+                cmd_color = (0, 255, 0)  # Bright Green Notification Badge
             elif center_dist < CRITICAL_STOP_DIST or (left_dist < CRITICAL_STOP_DIST and right_dist < CRITICAL_STOP_DIST):
                 cmd_text = "STOP! DANGER"
                 cmd_color = (0, 0, 255)  # Red
             elif center_dist >= safe_distance_threshold:
-                # Path ahead is clear
                 cmd_text = "GO FORWARD"
                 cmd_color = (0, 255, 0)  # Green
             else:
-                # Center is blocked, determine turn direction
+                # Center is blocked, determine relative turn vector clearance
                 if left_dist > right_dist:
                     cmd_text = "TURN LEFT"
                     cmd_color = (0, 255, 255)  # Yellow
@@ -160,8 +159,6 @@ def main():
             # RENDER PREMIUM VISUAL DASHBOARD
             # ----------------------------------------------------
             h, w, _ = rgb_frame.shape
-            
-            # Resize source frames for compact side-by-side display (640x360 each)
             display_w = 640
             display_h = 360
             
@@ -169,81 +166,79 @@ def main():
             depth_colored = processor.visualize_depth(depth_frame)
             depth_small = cv2.resize(depth_colored, (display_w, display_h))
             
-            # Draw boundary zones overlay on RGB frame
-            # 3 zones: Left (0 to w//3), Center (w//3 to 2*w//3), Right (2*w//3 to w)
+            # Draw boundary zones alpha transparency overlay on RGB frame
             col_w = display_w // 3
-            
-            # Zone alpha overlays
             overlay = rgb_small.copy()
             
-            # Left zone color (red if blocked, green if clear)
+            # Left zone overlay
             left_color = (0, 0, 255) if left_dist < safe_distance_threshold else (0, 255, 0)
             cv2.rectangle(overlay, (0, 0), (col_w, display_h), left_color, -1)
             
-            # Center zone color
-            center_color = (0, 0, 255) if center_dist < safe_distance_threshold else (0, 255, 0)
+            # Center zone overlay (Cyan blue highlight if an active doorway landmark is confirmed)
+            if is_doorway:
+                center_color = (255, 255, 0) # Cyan highlight vector
+            else:
+                center_color = (0, 0, 255) if center_dist < safe_distance_threshold else (0, 255, 0)
             cv2.rectangle(overlay, (col_w, 0), (col_w * 2, display_h), center_color, -1)
             
-            # Right zone color
+            # Right zone overlay
             right_color = (0, 0, 255) if right_dist < safe_distance_threshold else (0, 255, 0)
             cv2.rectangle(overlay, (col_w * 2, 0), (display_w, display_h), right_color, -1)
             
-            # Blend overlay with RGB
+            # Blend overlay matrix with original RGB viewport
             cv2.addWeighted(overlay, 0.15, rgb_small, 0.85, 0, rgb_small)
             
-            # Draw zone boundaries on both frames
+            # Grid layout partitioning lines
             for col in [col_w, col_w * 2]:
                 cv2.line(rgb_small, (col, 0), (col, display_h), (255, 255, 255), 1)
                 cv2.line(depth_small, (col, 0), (col, display_h), (255, 255, 255), 1)
                 
-            # Add text markers for distance in each zone
+            # Render textual metric data on top of frames
             cv2.putText(rgb_small, f"L: {left_dist:.0f}mm", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(rgb_small, f"C: {center_dist:.0f}mm", (col_w + 20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             cv2.putText(rgb_small, f"R: {right_dist:.0f}mm", (col_w * 2 + 20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
             
-            # Combine side-by-side (1280x360)
+            # Horizontal stacking (1280x360)
             main_panels = np.hstack((rgb_small, depth_small))
             
-            # Create a dedicated dashboard HUD footer panel (1280x120)
+            # Create slate dark HUD footer panel configuration (1280x120)
             hud_h = 120
             hud_w = display_w * 2
             hud = np.zeros((hud_h, hud_w, 3), dtype=np.uint8)
-            # Fill with subtle slate dark color
             hud[:] = [24, 20, 18]
             
-            # Draw borders
             cv2.rectangle(hud, (0, 0), (hud_w - 1, hud_h - 1), (50, 50, 50), 1)
             
-            # Draw guidance direction block in the center
-            cmd_box_x1 = hud_w // 2 - 180
-            cmd_box_x2 = hud_w // 2 + 180
+            # Center guidance command rendering block
+            cmd_box_x1 = hud_w // 2 - 200
+            cmd_box_x2 = hud_w // 2 + 200
             cv2.rectangle(hud, (cmd_box_x1, 15), (cmd_box_x2, 105), cmd_color, -1)
-            # Add contrast shadow to text for premium feel
+            
             text_size = cv2.getTextSize(cmd_text, cv2.FONT_HERSHEY_DUPLEX, 1.1, 3)[0]
             text_x = hud_w // 2 - text_size[0] // 2
             text_y = hud_h // 2 + text_size[1] // 2
-            # Text shadow
+            
+            # Drop shadow overlay logic for enhanced UI definition
             cv2.putText(hud, cmd_text, (text_x + 2, text_y + 2), cv2.FONT_HERSHEY_DUPLEX, 1.1, (0, 0, 0), 3)
             cv2.putText(hud, cmd_text, (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX, 1.1, (255, 255, 255), 3)
             
-            # Left panel metadata (Telemetry)
+            # Telemetry readout strings (Left side panel)
             cv2.putText(hud, "SYSTEM TELEMETRY", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
-            cv2.putText(hud, f"Model: ZED 1 Camera", (30, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(hud, "Model: ZED 1 + Proactive Frontier", (30, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.putText(hud, f"FPS:   {processor.fps:.1f} Hz", (30, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if processor.fps > 10 else (0, 150, 255), 1, cv2.LINE_AA)
-            cv2.putText(hud, f"Mode:  USB 2.0 (VGA)", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(hud, "Mode:  USB 2.0 Fallback Loop", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             
-            # Right panel settings
+            # Parameter threshold readings (Right side panel)
             cv2.putText(hud, "THRESHOLD SETTINGS", (hud_w - 280, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
             cv2.putText(hud, f"Safe Distance: {safe_distance_threshold:.0f} mm", (hud_w - 280, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             cv2.putText(hud, "Adjust: [+] / [-] keys", (hud_w - 280, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (140, 140, 140), 1, cv2.LINE_AA)
             
-            # Combine panel and footer vertically to create final dashboard (1280x480)
+            # Build full stacked canvas layout array matrix (1280x480)
             dashboard = np.vstack((main_panels, hud))
             
-            # Show output
             cv2.imshow("ZED Spatial Room Guidance Dashboard", dashboard)
             
-            # Handle key events
+            # Process incoming manual keystroke handlers
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break

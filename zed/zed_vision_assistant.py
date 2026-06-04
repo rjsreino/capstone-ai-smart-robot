@@ -15,6 +15,23 @@ import io
 import wave
 import sys
 import os
+
+# Ensure FFmpeg is in the path for Whisper subprocess calls on Windows (dynamic for all users)
+if sys.platform == "win32":
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        ffmpeg_dir = os.path.join(
+            local_app_data,
+            "Microsoft",
+            "WinGet",
+            "Packages",
+            "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe",
+            "ffmpeg-8.1.1-full_build",
+            "bin"
+        )
+        if os.path.exists(ffmpeg_dir) and ffmpeg_dir not in os.environ["PATH"]:
+            os.environ["PATH"] = ffmpeg_dir + os.pathsep + os.environ["PATH"]
+
 import queue
 import tempfile
 import asyncio

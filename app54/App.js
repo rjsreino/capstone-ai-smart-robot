@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
   Platform,
+  KeyboardAvoidingView,
 } from "react-native";
 
 import * as Speech from "expo-speech";
@@ -43,7 +44,7 @@ const RECORDING_OPTIONS = {
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://192.168.45.150:8000");
+  const [serverUrl, setServerUrl] = useState("http://192.168.45.148:8000");
   const [data, setData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
@@ -342,11 +343,13 @@ export default function App() {
   };
 
   const sendCommand = async () => {
-    if (!command.trim()) return;
+    const userCommand = command.trim();
+    if (!userCommand || isProcessing) return;
+
+    setIsProcessing(true);
+    setCommand("");
 
     try {
-      const userCommand = command;
-
       const response = await fetch(`${serverUrl}/command`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -380,10 +383,10 @@ export default function App() {
         pitch: 1.0,
         volume: 1.0,
       });
-
-      setCommand("");
     } catch (error) {
       console.log("Command error:", error);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -425,7 +428,14 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={styles.container}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          contentContainerStyle={styles.container}
+          keyboardShouldPersistTaps="handled"
+        >
         <LinearGradient
           colors={["#172554", "#0b1026", "#050816"]}
           style={styles.hero}
@@ -594,10 +604,19 @@ export default function App() {
             placeholderTextColor="#64748b"
             value={command}
             onChangeText={setCommand}
+            onSubmitEditing={sendCommand}
+            returnKeyType="send"
+            editable={!isProcessing}
           />
 
-          <Pressable style={styles.sendButton} onPress={sendCommand}>
-            <Text style={styles.sendText}>SEND COMMAND</Text>
+          <Pressable 
+            style={[styles.sendButton, isProcessing && { opacity: 0.5 }]} 
+            onPress={sendCommand}
+            disabled={isProcessing}
+          >
+            <Text style={styles.sendText}>
+              {isProcessing ? "SENDING..." : "SEND COMMAND"}
+            </Text>
           </Pressable>
         </View>
 
@@ -634,7 +653,8 @@ export default function App() {
             <Text style={styles.historyAI}>VICKY: {item.answer}</Text>
           </View>
         ))}
-      </ScrollView>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

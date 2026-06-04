@@ -1119,6 +1119,43 @@ def reset_map():
     return {"status": "success"}
 
 
+@app.post("/command")
+def manual_command(payload: dict):
+    command_text = payload.get("command", "").strip().lower()
+
+    with zva.frame_lock:
+        detections = list(zva.latest_detections)
+        guidance = zva.guidance_cmd
+        zones_data = dict(zva.zones_data)
+
+    llm_detections = [
+        {
+            "class": d["class_name"],
+            "position": d["position"],
+            "distance": d["distance"],
+            "confidence": round(d["confidence"], 2),
+            "depth_meters": d.get("depth_meters"),
+        }
+        for d in detections
+    ]
+
+    response = ask_llm(
+        question=command_text,
+        detections=llm_detections,
+        direction_summary={
+            "left_distance_mm": float(zones_data.get("left", 0)),
+            "center_distance_mm": float(zones_data.get("center", 0)),
+            "right_distance_mm": float(zones_data.get("right", 0)),
+            "best_direction": guidance,
+        },
+        ocr_text=""
+    )
+
+    return {
+        "response": response
+    }
+
+
 @app.post("/voice-command")
 async def voice_command(file: UploadFile = File(...)):
     audio_bytes = await file.read()
