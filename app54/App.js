@@ -43,7 +43,7 @@ const RECORDING_OPTIONS = {
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://192.168.45.150:8000");
+  const [serverUrl, setServerUrl] = useState("http://192.168.45.22:8000");
   const [data, setData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
@@ -59,6 +59,39 @@ export default function App() {
   const lastSpeakTime = useRef(0);
   const lastCommandTime = useRef(0);
   const guidanceEnabledRef = useRef(true);
+
+  useEffect(() => {
+  if (!serverUrl) return;
+
+  const fetchAutopilot = async () => {
+    try {
+      const response = await fetch(`${serverUrl}/autopilot-guidance`);
+      const json = await response.json();
+
+      if (!json.active || !json.guidance) return;
+      if (json.guidance === lastSpoken.current) return;
+
+      lastSpoken.current = json.guidance;
+
+      const speaking = Speech.isSpeaking();
+
+      if (!speaking) {
+        Speech.speak(json.guidance, {
+          language: "en-US",
+          rate: 0.9,
+          pitch: 1.0,
+          volume: 1.0,
+        });
+      }
+    } catch (error) {
+      console.log("Autopilot guidance error:", error);
+    }
+  };
+
+  const interval = setInterval(fetchAutopilot, 1200);
+
+  return () => clearInterval(interval);
+}, [serverUrl]);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const scanAnim = useRef(new Animated.Value(0)).current;
@@ -329,17 +362,17 @@ export default function App() {
     lastSpoken.current = message;
     lastSpeakTime.current = Date.now();
 
-    Speech.isSpeakingAsync().then((speaking) => {
-      if (!speaking) {
-        Speech.speak(message, {
-          language: "en-US",
-          rate: 0.9,
-          pitch: 1.0,
-          volume: 1.0,
-        });
-      }
-    });
-  };
+    const speaking = Speech.isSpeaking();
+
+    if (!speaking) {
+      Speech.speak(message, {
+        language: "en-US",
+        rate: 0.9,
+        pitch: 1.0,
+        volume: 1.0,
+      });
+    }
+  }
 
   const sendCommand = async () => {
     if (!command.trim()) return;

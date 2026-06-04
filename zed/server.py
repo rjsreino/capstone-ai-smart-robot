@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 import uvicorn
 import threading
 import zed_vision_assistant as zva
@@ -11,6 +11,8 @@ from vicky_db import db_logger, AsyncSessionLocal, OccupancyMap
 from sqlalchemy import select
 import heapq
 import numpy as np
+from semantic_navigation import SemanticNavigator
+from spatial_memory import SpatialMemoryNavigationSystem
 
 # Global Navigation Goal: grid row Z, grid col X (default 3m forward)
 current_goal = (80, 50)
@@ -71,6 +73,18 @@ def astar_pathfind(grid: list, start: tuple, goal: tuple) -> list:
 
 whisper_model = whisper.load_model("tiny")
 app = FastAPI()
+navigator = SemanticNavigator()
+spatial_memory = SpatialMemoryNavigationSystem()
+
+
+def get_live_spatial_snapshot():
+    with zva.frame_lock:
+        return {
+            "grid": [row[:] for row in zva.occupancy_grid],
+            "semantic_objects": [obj.copy() for obj in getattr(zva, "semantic_objects", [])],
+            "pose": dict(zva.pose_data),
+            "detections": [d.copy() for d in zva.latest_detections],
+        }
 
 @app.on_event("startup")
 async def startup_event():
@@ -233,6 +247,26 @@ def status():
             "objects": getattr(zva, "semantic_objects", [])
         }
         
+@app.get("/autopilot-guidance")
+def autopilot_guidance():
+    with zva.frame_lock:
+        detections = list(zva.latest_detections)
+
+    guidance = navigator.update_navigation(detections)
+
+    if guidance:
+        return {
+            "active": True,
+            "guidance": guidance,
+            "target": navigator.active_target_class
+        }
+
+    return {
+        "active": False,
+        "guidance": "",
+        "target": None
+    }
+    
 @app.get("/map", response_class=HTMLResponse)
 def map_view():
     return """
@@ -1119,6 +1153,133 @@ def reset_map():
     return {"status": "success"}
 
 
+@app.post("/start-mapping")
+def start_mapping(payload: dict):
+    snapshot = get_live_spatial_snapshot()
+    map_name = payload.get("map_name") or "Room"
+    map_id = payload.get("map_id")
+    current_map = spatial_memory.start_mapping(
+        map_name=map_name,
+        map_id=map_id,
+        live_grid=snapshot["grid"],
+        semantic_objects=snapshot["semantic_objects"],
+        pose=snapshot["pose"],
+    )
+    return {
+        "status": "mapping",
+        "message": "Slowly turn around and scan the room.",
+        "map": current_map,
+    }
+
+
+@app.post("/save-map")
+def save_spatial_map():
+    snapshot = get_live_spatial_snapshot()
+    current_map = spatial_memory.save_current_map(
+        live_grid=snapshot["grid"],
+        semantic_objects=snapshot["semantic_objects"],
+    )
+    if not current_map:
+        raise HTTPException(status_code=400, detail="No active map to save.")
+    return {
+        "status": "saved",
+        "map_id": current_map["map_id"],
+        "map_name": current_map["map_name"],
+        "landmark_count": len(current_map.get("landmarks", [])),
+        "coverage_percent": current_map.get("metadata", {}).get("coverage_percent", 0.0),
+    }
+
+
+@app.post("/stop-mapping")
+def stop_mapping():
+    spatial_memory.stop_mapping()
+    return {"status": "idle", "mode": spatial_memory.state["mode"]}
+
+
+@app.get("/maps")
+def list_spatial_maps():
+    return {
+        "maps": spatial_memory.list_maps(),
+        "current_map_id": spatial_memory.state.get("current_map_id"),
+        "graph": spatial_memory.map_graph,
+    }
+
+
+@app.post("/load-map")
+def load_spatial_map(payload: dict):
+    map_data = spatial_memory.load_map(
+        map_id=payload.get("map_id"),
+        map_name=payload.get("map_name"),
+    )
+    if not map_data:
+        raise HTTPException(status_code=404, detail="Map not found.")
+    return {"status": "loaded", "map": map_data}
+
+
+@app.post("/set-current-map")
+def set_current_map(payload: dict):
+    return load_spatial_map(payload)
+
+
+@app.get("/current-map")
+def get_current_map():
+    current_map = spatial_memory.state.get("current_map")
+    if not current_map:
+        return {"active": False, "map": None}
+    return {"active": True, "map": current_map}
+
+
+@app.post("/start-navigation")
+def start_spatial_navigation(payload: dict):
+    snapshot = get_live_spatial_snapshot()
+    goal_type = payload.get("goal_type", "exit")
+    best, error = spatial_memory.start_navigation(
+        goal_type=goal_type,
+        target_landmark_id=payload.get("target_landmark_id"),
+        pose=snapshot["pose"],
+        semantic_objects=snapshot["semantic_objects"],
+    )
+    if error:
+        raise HTTPException(status_code=400, detail=error)
+    return {
+        "status": "navigating",
+        "target": best["door"],
+        "score": best["score"],
+        "path": best["path"],
+    }
+
+
+@app.get("/navigation-guidance")
+def navigation_guidance():
+    snapshot = get_live_spatial_snapshot()
+    return spatial_memory.navigation_guidance(
+        pose=snapshot["pose"],
+        semantic_objects=snapshot["semantic_objects"],
+    )
+
+
+@app.post("/stop-navigation")
+def stop_spatial_navigation():
+    spatial_memory.stop_navigation()
+    navigator.stop_navigation()
+    return {"status": "stopped", "mode": spatial_memory.state["mode"]}
+
+
+@app.post("/link-map-door")
+def link_map_door(payload: dict):
+    required = ["map_id", "door_id", "target_map_id", "target_door_id"]
+    missing = [key for key in required if not payload.get(key)]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing fields: {', '.join(missing)}")
+    link = spatial_memory.link_map_door(
+        map_id=payload["map_id"],
+        door_id=payload["door_id"],
+        target_map_id=payload["target_map_id"],
+        target_door_id=payload["target_door_id"],
+    )
+    return {"status": "linked", "link": link, "graph": spatial_memory.map_graph}
+
+
 @app.post("/voice-command")
 async def voice_command(file: UploadFile = File(...)):
     audio_bytes = await file.read()
@@ -1145,6 +1306,115 @@ async def voice_command(file: UploadFile = File(...)):
         }
         for d in detections
     ]
+
+    snapshot = get_live_spatial_snapshot()
+
+    if "start mapping" in command_text or "map this room" in command_text:
+        room_name = "Room"
+        for phrase in ["this room as", "room as", "map as"]:
+            if phrase in command_text:
+                room_name = command_text.split(phrase, 1)[1].strip().title() or room_name
+                break
+        current_map = spatial_memory.start_mapping(
+            map_name=room_name,
+            live_grid=snapshot["grid"],
+            semantic_objects=snapshot["semantic_objects"],
+            pose=snapshot["pose"],
+        )
+        return {
+            "transcript": command_text,
+            "response": f"Mapping started for {current_map['map_name']}. Slowly turn around and scan the room."
+        }
+
+    if "save map" in command_text or "save this map" in command_text:
+        current_map = spatial_memory.save_current_map(
+            live_grid=snapshot["grid"],
+            semantic_objects=snapshot["semantic_objects"],
+        )
+        if current_map:
+            return {
+                "transcript": command_text,
+                "response": f"Map saved as {current_map['map_name']} with {len(current_map.get('landmarks', []))} landmarks."
+            }
+        return {
+            "transcript": command_text,
+            "response": "No active map is being created right now."
+        }
+
+    if "stop mapping" in command_text:
+        spatial_memory.stop_mapping()
+        return {
+            "transcript": command_text,
+            "response": "Mapping stopped."
+        }
+
+    if (
+        "leave the room" in command_text
+        or "exit the room" in command_text
+        or "find the exit" in command_text
+        or "take me to the exit" in command_text
+    ):
+        best, error = spatial_memory.start_navigation(
+            goal_type="exit",
+            pose=snapshot["pose"],
+            semantic_objects=snapshot["semantic_objects"],
+        )
+        if error:
+            return {
+                "transcript": command_text,
+                "response": error
+            }
+        guidance_payload = spatial_memory.navigation_guidance(
+            pose=snapshot["pose"],
+            semantic_objects=snapshot["semantic_objects"],
+        )
+        instruction = guidance_payload.get("instruction") or "Route planned."
+        target_id = best["door"].get("id", "exit")
+        return {
+            "transcript": command_text,
+            "response": f"Safest exit selected: {target_id}. {instruction}"
+        }
+
+    
+    switch_answer = navigator.handle_switch_answer(command_text)
+    if switch_answer:
+        return {
+            "transcript": command_text,
+            "response": switch_answer
+        }
+
+    if "stop navigation" in command_text or "cancel navigation" in command_text:
+        spatial_memory.stop_navigation()
+        response = navigator.stop_navigation()
+        return {
+            "transcript": command_text,
+            "response": response
+        }
+
+    navigation_keywords = [
+        "guide me",
+        "take me",
+        "go to",
+        "find",
+        "where is",
+        "i want to",
+        "lead me",
+        "bring me",
+    ]
+
+    if any(keyword in command_text for keyword in navigation_keywords):
+        response = navigator.start_navigation(command_text, detections)
+        return {
+            "transcript": command_text,
+            "response": response
+        }
+
+    active_guidance = navigator.update_navigation(detections)
+    if active_guidance:
+        return {
+            "transcript": command_text,
+            "response": active_guidance
+        }
 
     response = ask_llm(
         question=command_text,
@@ -1214,6 +1484,8 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
     result = whisper_model.transcribe(temp_audio_path, language="en")
     transcript = result["text"].strip()
     return {"transcript": transcript}
+
+
 
 if __name__ == "__main__":
     import argparse

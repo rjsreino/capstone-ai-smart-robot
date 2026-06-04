@@ -1,0 +1,6 @@
+path: datasets/YOLODataset_door_local
+train: images/train
+val: images/val
+
+names:
+    0: door_local

@@ -1,0 +1,6 @@
+path: datasets/exit_sign_only
+train: images/train
+val: images/val
+
+names:
+  0: exit_sign
