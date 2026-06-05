@@ -65,6 +65,7 @@ class ZedDepthProcessor:
         self.yaw = 0.0
         self.positional_tracking_enabled = False
         self.is_tracking_ok = False
+        self.tracking_state = "DISABLED"
         self.occupancy_grid = np.zeros((100, 100), dtype=np.int8)
         
     def start(self):
@@ -157,7 +158,7 @@ class ZedDepthProcessor:
         # ZED 1 can spam keyframe-memory errors during long scans; our saved
         # spatial memory is handled separately in zed/maps, so tracking is
         # optional for the live demo path.
-        tracking_requested = os.getenv("VICKY_ZED_TRACKING", "0").strip().lower() in {"1", "true", "yes"}
+        tracking_requested = os.getenv("VICKY_ZED_TRACKING", "1").strip().lower() in {"1", "true", "yes"}
         if tracking_requested:
             tracking_params = sl.PositionalTrackingParameters()
             if hasattr(tracking_params, "enable_area_memory"):
@@ -167,12 +168,15 @@ class ZedDepthProcessor:
             status_tracking = self.zed.enable_positional_tracking(tracking_params)
             if status_tracking == sl.ERROR_CODE.SUCCESS:
                 self.positional_tracking_enabled = True
+                self.tracking_state = "OK"
                 print("[ZedDepthProcessor] SLAM Positional Tracking enabled successfully.")
             else:
                 self.positional_tracking_enabled = False
+                self.tracking_state = str(status_tracking)
                 print(f"[ZedDepthProcessor WARNING] Failed to enable positional tracking: {status_tracking}")
         else:
             self.positional_tracking_enabled = False
+            self.tracking_state = "DISABLED"
             print("[ZedDepthProcessor] ZED positional tracking disabled (set VICKY_ZED_TRACKING=1 to enable).")
         
     def stop(self):
@@ -209,6 +213,7 @@ class ZedDepthProcessor:
                     camera_pose = sl.Pose()
                     state = self.zed.get_position(camera_pose, sl.REFERENCE_FRAME.WORLD)
                     self.is_tracking_ok = (state == sl.POSITIONAL_TRACKING_STATE.OK)
+                    self.tracking_state = "OK" if self.is_tracking_ok else str(state)
                     if self.is_tracking_ok:
                         translation = camera_pose.get_translation().get()
                         self.tx = float(translation[0])

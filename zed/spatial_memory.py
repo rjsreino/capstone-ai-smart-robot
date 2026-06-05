@@ -19,20 +19,57 @@ STATIC_LANDMARK_CLASSES = {
     "bench",
 }
 
+STATIC_OBJECT_CLASSES = {
+    "door",
+    "doorway",
+    "door local",
+    "door_local",
+    "open door",
+    "open_door",
+    "closed door",
+    "closed_door",
+    "exit sign",
+    "exit_sign",
+    "stairs",
+    "shelf",
+    "counter",
+    "table",
+    "dining table",
+    "bench",
+    "chair",
+    "couch",
+    "bed",
+    "tv",
+    "potted plant",
+}
+
 DYNAMIC_CLASSES = {
     "person",
     "dog",
     "cat",
-    "chair",
     "backpack",
     "handbag",
     "suitcase",
     "bottle",
     "cup",
     "box",
+    "cell phone",
+    "laptop",
+    "book",
+    "keyboard",
+    "mouse",
+    "remote",
 }
 
 EXIT_LANDMARK_TYPES = {"door", "doorway", "exit sign"}
+OBJECT_CLASSIFICATION_COLORS = {
+    "static": "#38bdf8",
+    "dynamic": "#f97316",
+    "landmark": "#facc15",
+    "exit": "#22f59c",
+}
+EXIT_REACHED_RADIUS_CELLS = 4
+MOVING_AWAY_DELTA_CELLS = 3
 
 
 def _clamp(value, low, high):
@@ -41,6 +78,25 @@ def _clamp(value, low, high):
 
 def _normalize_label(label):
     return str(label or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def classify_object_mobility(label):
+    normalized = _normalize_label(label)
+    if normalized in STATIC_OBJECT_CLASSES:
+        return "static"
+    if normalized in DYNAMIC_CLASSES:
+        return "dynamic"
+    return "dynamic"
+
+
+def object_color_for_label(label, mobility=None):
+    normalized = _normalize_label(label)
+    if "exit" in normalized:
+        return OBJECT_CLASSIFICATION_COLORS["exit"]
+    if "door" in normalized:
+        return OBJECT_CLASSIFICATION_COLORS["landmark"]
+    resolved_mobility = mobility or classify_object_mobility(normalized)
+    return OBJECT_CLASSIFICATION_COLORS.get(resolved_mobility, OBJECT_CLASSIFICATION_COLORS["dynamic"])
 
 
 class SpatialMemoryNavigationSystem:
@@ -64,6 +120,10 @@ class SpatialMemoryNavigationSystem:
             "last_instruction": "",
             "previous_user_pos": None,
             "navigation_target": None,
+            "last_goal_distance_cells": None,
+            "exit_reached": False,
+            "map_session_origin_grid": None,
+            "map_session_origin_pose": None,
         }
 
     def _load_map_graph(self):
@@ -99,12 +159,82 @@ class SpatialMemoryNavigationSystem:
             normalized.append(row)
         return normalized
 
-    def pose_to_grid(self, pose):
+    def _raw_pose_to_grid(self, pose):
         x_m = float(pose.get("x", 0.0)) / 1000.0
         z_m = float(pose.get("z", 0.0)) / 1000.0
         gx = _clamp(int(x_m / self.cell_size_m) + self.width // 2, 0, self.width - 1)
         gz = _clamp(int(z_m / self.cell_size_m) + self.height // 2, 0, self.height - 1)
         return gz, gx
+
+    def _origin_grid_for_map(self, map_data):
+        session_origin = self.state.get("map_session_origin_grid")
+        current_map = self.state.get("current_map")
+        if (
+            session_origin
+            and current_map
+            and map_data
+            and current_map.get("map_id") == map_data.get("map_id")
+        ):
+            return (
+                _clamp(int(session_origin.get("z", self.height // 2)), 0, self.height - 1),
+                _clamp(int(session_origin.get("x", self.width // 2)), 0, self.width - 1),
+            )
+        metadata = (map_data or {}).get("metadata", {})
+        origin_grid = metadata.get("origin_grid") or {}
+        return (
+            _clamp(int(origin_grid.get("z", self.height // 2)), 0, self.height - 1),
+            _clamp(int(origin_grid.get("x", self.width // 2)), 0, self.width - 1),
+        )
+
+    def _to_map_grid_cell(self, raw_cell, map_data):
+        origin_z, origin_x = self._origin_grid_for_map(map_data)
+        raw_z, raw_x = raw_cell
+        map_z = _clamp(raw_z - origin_z + self.height // 2, 0, self.height - 1)
+        map_x = _clamp(raw_x - origin_x + self.width // 2, 0, self.width - 1)
+        return map_z, map_x
+
+    def pose_to_grid(self, pose):
+        raw_cell = self._raw_pose_to_grid(pose)
+        current_map = self.state.get("current_map")
+        if current_map:
+            return self._to_map_grid_cell(raw_cell, current_map)
+        return raw_cell
+
+    def _grid_to_map_frame(self, grid, map_data):
+        normalized = self._normalize_grid(grid)
+        origin_z, origin_x = self._origin_grid_for_map(map_data)
+        shifted = [[0 for _ in range(self.width)] for _ in range(self.height)]
+        for raw_z in range(self.height):
+            for raw_x in range(self.width):
+                value = int(normalized[raw_z][raw_x])
+                if value == 0:
+                    continue
+                map_z = raw_z - origin_z + self.height // 2
+                map_x = raw_x - origin_x + self.width // 2
+                if 0 <= map_z < self.height and 0 <= map_x < self.width:
+                    shifted[map_z][map_x] = value
+        return shifted
+
+    def _semantic_objects_to_map_frame(self, semantic_objects, map_data):
+        mapped = []
+        for obj in semantic_objects or []:
+            item = copy.deepcopy(obj)
+            gx = item.get("x")
+            gz = item.get("z")
+            if gx is not None and gz is not None:
+                map_z, map_x = self._to_map_grid_cell((int(gz), int(gx)), map_data)
+                item["x"] = map_x
+                item["z"] = map_z
+                item["raw_x"] = int(gx)
+                item["raw_z"] = int(gz)
+            mapped.append(item)
+        return mapped
+
+    def semantic_objects_to_current_map(self, semantic_objects):
+        current_map = self.state.get("current_map")
+        if not current_map:
+            return [copy.deepcopy(obj) for obj in semantic_objects or []]
+        return self._semantic_objects_to_map_frame(semantic_objects, current_map)
 
     def _update_user_pose(self, pose):
         self.state["user_pose"] = {
@@ -113,7 +243,7 @@ class SpatialMemoryNavigationSystem:
             "yaw": float(pose.get("yaw", 0.0)),
         }
 
-    def _create_empty_map(self, map_name, static_grid=None, map_id=None):
+    def _create_empty_map(self, map_name, static_grid=None, map_id=None, origin_pose=None, origin_grid=None):
         map_id = map_id or f"{map_name.lower().replace(' ', '_')}_{int(time.time())}"
         return {
             "map_id": map_id,
@@ -124,9 +254,12 @@ class SpatialMemoryNavigationSystem:
             "height": self.height,
             "static_grid": self._normalize_grid(static_grid),
             "landmarks": [],
+            "static_objects": [],
             "metadata": {
                 "scan_quality": 0.0,
                 "coverage_percent": 0.0,
+                "origin_pose_mm": origin_pose or {"x": 0.0, "z": 0.0, "yaw": 0.0},
+                "origin_grid": origin_grid or {"z": self.height // 2, "x": self.width // 2},
             },
         }
 
@@ -180,6 +313,52 @@ class SpatialMemoryNavigationSystem:
         map_data["landmarks"].append(landmark)
         return landmark
 
+    def _add_or_update_static_object(self, map_data, static_object):
+        map_data.setdefault("static_objects", [])
+        for existing in map_data["static_objects"]:
+            if existing["label"] != static_object["label"]:
+                continue
+            dist = math.hypot(
+                existing["grid_x"] - static_object["grid_x"],
+                existing["grid_z"] - static_object["grid_z"],
+            )
+            if dist <= 3:
+                existing["grid_x"] = int(round((existing["grid_x"] + static_object["grid_x"]) / 2))
+                existing["grid_z"] = int(round((existing["grid_z"] + static_object["grid_z"]) / 2))
+                existing["confidence"] = max(existing.get("confidence", 0.0), static_object["confidence"])
+                if static_object.get("distance") is not None:
+                    existing["distance"] = static_object["distance"]
+                return existing
+
+        map_data["static_objects"].append(static_object)
+        return static_object
+
+    def update_static_objects(self, map_data, semantic_objects):
+        map_data.setdefault("static_objects", [])
+        for obj in semantic_objects or []:
+            label = _normalize_label(obj.get("label") or obj.get("class") or obj.get("class_name"))
+            mobility = obj.get("mobility") or obj.get("classification") or classify_object_mobility(label)
+            if mobility != "static" or label not in STATIC_OBJECT_CLASSES:
+                continue
+            gx = obj.get("x")
+            gz = obj.get("z")
+            if gx is None or gz is None:
+                continue
+            static_object = {
+                "id": f"{label.replace(' ', '_')}_{uuid.uuid4().hex[:8]}",
+                "label": "table" if label == "dining table" else label,
+                "detected_label": _normalize_label(obj.get("detected_label") or label),
+                "classification": "static",
+                "mobility": "static",
+                "grid_x": _clamp(int(gx), 0, self.width - 1),
+                "grid_z": _clamp(int(gz), 0, self.height - 1),
+                "confidence": float(obj.get("confidence", 0.75)),
+                "distance": obj.get("distance"),
+                "source_model": obj.get("source_model"),
+                "color": object_color_for_label(label, "static"),
+            }
+            self._add_or_update_static_object(map_data, static_object)
+
     def update_static_landmarks(self, map_data, semantic_objects):
         for obj in semantic_objects or []:
             label = _normalize_label(obj.get("label") or obj.get("class") or obj.get("class_name"))
@@ -205,7 +384,8 @@ class SpatialMemoryNavigationSystem:
         obstacles = []
         for obj in semantic_objects or []:
             label = _normalize_label(obj.get("label") or obj.get("class") or obj.get("class_name"))
-            if label not in DYNAMIC_CLASSES:
+            mobility = obj.get("mobility") or obj.get("classification") or classify_object_mobility(label)
+            if mobility != "dynamic" or label not in DYNAMIC_CLASSES:
                 continue
             gx = obj.get("x")
             gz = obj.get("z")
@@ -213,6 +393,9 @@ class SpatialMemoryNavigationSystem:
                 continue
             obstacles.append({
                 "class_name": label,
+                "classification": "dynamic",
+                "mobility": "dynamic",
+                "color": object_color_for_label(label, "dynamic"),
                 "grid_x": _clamp(int(gx), 0, self.width - 1),
                 "grid_z": _clamp(int(gz), 0, self.height - 1),
                 "distance": obj.get("distance"),
@@ -221,11 +404,29 @@ class SpatialMemoryNavigationSystem:
         return obstacles
 
     def start_mapping(self, map_name, live_grid, semantic_objects, pose, map_id=None):
-        current_map = self._create_empty_map(map_name, live_grid, map_id=map_id)
-        self.update_static_landmarks(current_map, semantic_objects)
+        raw_origin_z, raw_origin_x = self._raw_pose_to_grid(pose)
+        origin_grid = {"z": raw_origin_z, "x": raw_origin_x}
+        origin_pose = {
+            "x": float(pose.get("x", 0.0)),
+            "z": float(pose.get("z", 0.0)),
+            "yaw": float(pose.get("yaw", 0.0)),
+        }
+        map_context = {"metadata": {"origin_grid": origin_grid}}
+        map_grid = self._grid_to_map_frame(live_grid, map_context)
+        current_map = self._create_empty_map(
+            map_name,
+            map_grid,
+            map_id=map_id,
+            origin_pose=origin_pose,
+            origin_grid=origin_grid,
+        )
+        semantic_objects_map = self._semantic_objects_to_map_frame(semantic_objects, current_map)
+        self.update_static_objects(current_map, semantic_objects_map)
+        self.update_static_landmarks(current_map, semantic_objects_map)
         current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
+        current_map["metadata"]["static_object_count"] = len(current_map.get("static_objects", []))
         self.state.update({
             "mode": "mapping",
             "current_map_id": current_map["map_id"],
@@ -233,6 +434,8 @@ class SpatialMemoryNavigationSystem:
             "active_goal": None,
             "active_path": [],
             "current_waypoint_index": 0,
+            "map_session_origin_grid": origin_grid,
+            "map_session_origin_pose": origin_pose,
         })
         self._update_user_pose(pose)
         return current_map
@@ -241,11 +444,15 @@ class SpatialMemoryNavigationSystem:
         current_map = self.state.get("current_map")
         if not current_map:
             return None
-        current_map["static_grid"] = self._merge_static_grid(current_map.get("static_grid"), live_grid)
-        self.update_static_landmarks(current_map, semantic_objects)
+        live_grid_map = self._grid_to_map_frame(live_grid, current_map)
+        semantic_objects_map = self._semantic_objects_to_map_frame(semantic_objects, current_map)
+        current_map["static_grid"] = self._merge_static_grid(current_map.get("static_grid"), live_grid_map)
+        self.update_static_objects(current_map, semantic_objects_map)
+        self.update_static_landmarks(current_map, semantic_objects_map)
         current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
+        current_map["metadata"]["static_object_count"] = len(current_map.get("static_objects", []))
         return current_map
 
     def save_current_map(self, live_grid=None, semantic_objects=None):
@@ -284,11 +491,12 @@ class SpatialMemoryNavigationSystem:
                 "saved_at": path.stat().st_mtime,
                 "file_name": path.name,
                 "landmark_count": len(data.get("landmarks", [])),
+                "static_object_count": len(data.get("static_objects", [])),
                 "coverage_percent": data.get("metadata", {}).get("coverage_percent", 0.0),
             })
         return maps
 
-    def load_map(self, map_id=None, map_name=None):
+    def load_map(self, map_id=None, map_name=None, anchor_pose=None):
         candidates = []
         if map_id:
             candidates.append(self._map_path(map_id))
@@ -302,10 +510,42 @@ class SpatialMemoryNavigationSystem:
             if map_name and data.get("map_name", "").lower() != str(map_name).lower():
                 continue
             data["static_grid"] = self._normalize_grid(data.get("static_grid"))
+            data.setdefault("static_objects", [])
+            data.setdefault("metadata", {})
+            data["metadata"].setdefault("origin_pose_mm", {"x": 0.0, "z": 0.0, "yaw": 0.0})
+            data["metadata"].setdefault("origin_grid", {"z": self.height // 2, "x": self.width // 2})
+            data["metadata"]["static_object_count"] = len(data.get("static_objects", []))
+            if anchor_pose is not None:
+                raw_origin_z, raw_origin_x = self._raw_pose_to_grid(anchor_pose)
+                session_origin_grid = {"z": raw_origin_z, "x": raw_origin_x}
+                session_origin_pose = {
+                    "x": float(anchor_pose.get("x", 0.0)),
+                    "z": float(anchor_pose.get("z", 0.0)),
+                    "yaw": float(anchor_pose.get("yaw", 0.0)),
+                }
+            else:
+                session_origin_grid = data["metadata"].get("origin_grid")
+                session_origin_pose = data["metadata"].get("origin_pose_mm")
             self.state["current_map_id"] = data.get("map_id")
             self.state["current_map"] = data
+            self.state["map_session_origin_grid"] = session_origin_grid
+            self.state["map_session_origin_pose"] = session_origin_pose
             return data
         return None
+
+    def unload_map(self):
+        self.stop_navigation()
+        if self.state["mode"] == "mapping":
+            self.state["mode"] = "idle"
+        self.state["current_map_id"] = None
+        self.state["current_map"] = None
+        self.state["active_goal"] = None
+        self.state["active_path"] = []
+        self.state["current_waypoint_index"] = 0
+        self.state["navigation_target"] = None
+        self.state["map_session_origin_grid"] = None
+        self.state["map_session_origin_pose"] = None
+        return self.state
 
     def build_navigation_grid(self, static_grid, live_obstacles):
         nav_grid = copy.deepcopy(self._normalize_grid(static_grid))
@@ -428,13 +668,16 @@ class SpatialMemoryNavigationSystem:
         return min(candidates, key=lambda item: item["score"]), None
 
     def start_navigation(self, goal_type, pose, semantic_objects, target_landmark_id=None):
-        current_map = self.state.get("current_map") or self.load_map()
+        current_map = self.state.get("current_map")
+        if not current_map:
+            current_map = self.load_map(anchor_pose=pose)
         if not current_map:
             return None, "No saved map loaded."
 
         self._update_user_pose(pose)
         user_pos = self.pose_to_grid(pose)
-        live_obstacles = self.get_live_dynamic_obstacles(semantic_objects)
+        semantic_objects_map = self._semantic_objects_to_map_frame(semantic_objects, current_map)
+        live_obstacles = self.get_live_dynamic_obstacles(semantic_objects_map)
         if goal_type == "exit":
             best, error = self.choose_best_exit(user_pos, current_map, live_obstacles)
         else:
@@ -449,6 +692,11 @@ class SpatialMemoryNavigationSystem:
             "current_waypoint_index": 0,
             "navigation_target": best["door"],
             "previous_user_pos": user_pos,
+            "last_goal_distance_cells": math.hypot(
+                user_pos[0] - int(best["door"]["grid_z"]),
+                user_pos[1] - int(best["door"]["grid_x"]),
+            ),
+            "exit_reached": False,
             "last_instruction": "",
         })
         return best, None
@@ -486,12 +734,28 @@ class SpatialMemoryNavigationSystem:
 
         self._update_user_pose(pose)
         user_pos = self.pose_to_grid(pose)
-        live_obstacles = self.get_live_dynamic_obstacles(semantic_objects)
+        semantic_objects_map = self._semantic_objects_to_map_frame(semantic_objects, self.state["current_map"])
+        live_obstacles = self.get_live_dynamic_obstacles(semantic_objects_map)
         nav_grid = self.build_navigation_grid(self.state["current_map"]["static_grid"], live_obstacles)
         rerouted = False
         warning = None
+        goal_distance = self._goal_distance_cells(user_pos)
 
-        if self.detect_wrong_direction(user_pos):
+        if goal_distance is not None and goal_distance <= EXIT_REACHED_RADIUS_CELLS:
+            target = self.state.get("navigation_target") or {}
+            target_type = _normalize_label(target.get("type"))
+            if target_type in EXIT_LANDMARK_TYPES:
+                instruction = "You have reached the exit doorway. You have exited the room."
+                self.state["exit_reached"] = True
+                self.state["last_goal_distance_cells"] = goal_distance
+                self.state["previous_user_pos"] = user_pos
+                self.state["last_instruction"] = instruction
+                return self._guidance_response(instruction, arrived=True)
+
+        if self.is_moving_away_from_goal(user_pos):
+            warning = self.return_to_goal_instruction(user_pos, float(pose.get("yaw", 0.0)))
+            rerouted = True
+        elif self.detect_wrong_direction(user_pos):
             warning = "You are moving away from the planned path. Replanning."
             rerouted = True
         elif self.path_blocked_by_live_obstacle(self.state["active_path"], live_obstacles):
@@ -512,23 +776,73 @@ class SpatialMemoryNavigationSystem:
         if warning:
             instruction = f"{warning} {instruction}"
         self.state["previous_user_pos"] = user_pos
+        if goal_distance is not None:
+            self.state["last_goal_distance_cells"] = goal_distance
         self.state["last_instruction"] = instruction
         return self._guidance_response(instruction, rerouted=rerouted)
 
-    def _guidance_response(self, instruction, rerouted=False):
+    def _guidance_response(self, instruction, rerouted=False, arrived=False):
         path = self.state.get("active_path", [])
         idx = self.state.get("current_waypoint_index", 0)
         remaining_cells = max(0, len(path) - idx - 1)
         target = self.state.get("navigation_target") or {}
+        user_pose = self.state.get("user_pose") or {}
+        user_cell = self.pose_to_grid({
+            "x": float(user_pose.get("x", 0.0)) * 1000.0,
+            "z": float(user_pose.get("z", 0.0)) * 1000.0,
+            "yaw": user_pose.get("yaw", 0.0),
+        })
+        distance_to_goal = self._goal_distance_cells(user_cell)
         return {
             "active": True,
             "instruction": instruction,
             "target": target.get("id"),
+            "target_type": target.get("type"),
             "remaining_distance_m": round(remaining_cells * self.cell_size_m, 2),
+            "distance_to_goal_m": round(distance_to_goal * self.cell_size_m, 2) if distance_to_goal is not None else None,
             "rerouted": rerouted,
+            "arrived": arrived,
+            "user_grid": {"z": user_cell[0], "x": user_cell[1]},
             "path": path,
             "goal": {"z": self.state["active_goal"][0], "x": self.state["active_goal"][1]},
         }
+
+    def _goal_distance_cells(self, user_pos):
+        goal = self.state.get("active_goal")
+        if not goal:
+            return None
+        return math.hypot(user_pos[0] - goal[0], user_pos[1] - goal[1])
+
+    def is_moving_away_from_goal(self, user_pos):
+        current_distance = self._goal_distance_cells(user_pos)
+        previous_distance = self.state.get("last_goal_distance_cells")
+        if current_distance is None or previous_distance is None:
+            return False
+        if current_distance <= EXIT_REACHED_RADIUS_CELLS:
+            return False
+        return current_distance > previous_distance + MOVING_AWAY_DELTA_CELLS
+
+    def return_to_goal_instruction(self, user_pos, user_yaw):
+        target = self.state.get("navigation_target") or {}
+        target_name = _normalize_label(target.get("type")) or "target"
+        goal = self.state.get("active_goal")
+        if not goal:
+            return f"Moving away from the {target_name}. Replanning."
+
+        dz = goal[0] - user_pos[0]
+        dx = goal[1] - user_pos[1]
+        target_angle = math.degrees(math.atan2(dx, dz))
+        delta = (target_angle - user_yaw + 540.0) % 360.0 - 180.0
+
+        if abs(delta) <= 25:
+            turn_instruction = "Go straight to return to it"
+        elif 25 < delta <= 135:
+            turn_instruction = "Turn right to return to it"
+        elif -135 <= delta < -25:
+            turn_instruction = "Turn left to return to it"
+        else:
+            turn_instruction = "Turn around to return to it"
+        return f"Moving away from the {target_name}. {turn_instruction}."
 
     def detect_wrong_direction(self, user_pos):
         previous = self.state.get("previous_user_pos")
@@ -588,6 +902,8 @@ class SpatialMemoryNavigationSystem:
             "navigation_target": None,
             "last_instruction": "",
             "previous_user_pos": None,
+            "last_goal_distance_cells": None,
+            "exit_reached": False,
         })
         return self.state
 

@@ -19,7 +19,7 @@ import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import { DeviceMotion } from "expo-sensors";
 import { LinearGradient } from "expo-linear-gradient";
-import Svg, { Circle, Line, Polygon, Rect } from "react-native-svg";
+import Svg, { Circle, Line, Polygon, Polyline, Rect } from "react-native-svg";
 import { WebView } from "react-native-webview";
 
 const RECORDING_OPTIONS = {
@@ -43,8 +43,27 @@ const RECORDING_OPTIONS = {
   },
 };
 
+const OBJECT_CLASSIFICATION_COLORS = {
+  static: "#38bdf8",
+  dynamic: "#f97316",
+  landmark: "#facc15",
+  exit: "#22f59c",
+};
+
+const getObjectMobility = (object) => {
+  const value = String(object?.mobility || object?.classification || "").toLowerCase();
+  return value === "static" ? "static" : "dynamic";
+};
+
+const getObjectColor = (object) => {
+  const label = String(object?.label || object?.detected_label || object?.object || object?.semantic_label || "").toLowerCase();
+  if (label.includes("exit")) return OBJECT_CLASSIFICATION_COLORS.exit;
+  if (label.includes("door")) return OBJECT_CLASSIFICATION_COLORS.landmark;
+  return object?.color || OBJECT_CLASSIFICATION_COLORS[getObjectMobility(object)] || OBJECT_CLASSIFICATION_COLORS.dynamic;
+};
+
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://192.168.45.148:8000");
+  const [serverUrl, setServerUrl] = useState("http://172.16.112.18:8000");
   const [data, setData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
@@ -508,7 +527,7 @@ export default function App() {
       setMapActionStatus(`${label}...`);
       const json = await postJson(path, body);
       const answer = path === "/save-map" && json.map_id
-        ? `Map saved as ${json.file_name || `${json.map_id}.json`} with ${json.landmark_count ?? 0} landmarks and ${json.grid_counts?.occupied ?? 0} obstacle cells.`
+        ? `Map saved as ${json.file_name || `${json.map_id}.json`} with ${json.landmark_count ?? 0} landmarks, ${json.static_object_count ?? 0} static objects, and ${json.grid_counts?.occupied ?? 0} obstacle cells.`
         : json.message || json.status || json.response || "Done.";
       setMapActionStatus(answer);
       setLastResponse(answer);
@@ -559,10 +578,15 @@ export default function App() {
   const guidanceColor = getGuidanceColor();
   const spatialMemory = data?.spatial_memory || {};
   const liveObjects = data?.objects || [];
+  const liveStaticObjects = liveObjects.filter((object) => getObjectMobility(object) === "static");
+  const liveDynamicObjects = liveObjects.filter((object) => getObjectMobility(object) === "dynamic");
   const mapGrid = spatialMemory.mode === "mapping"
     ? data?.map || currentMap?.static_grid || []
     : currentMap?.static_grid || data?.map || [];
   const mapLandmarks = currentMap?.landmarks || [];
+  const mapStaticObjects = currentMap?.static_objects || [];
+  const userGrid = data?.user_grid || { x: 50, z: 50 };
+  const mapPath = data?.path || [];
   const mapSampleSize = 20;
   const mapCells = [];
 
@@ -708,8 +732,12 @@ export default function App() {
               <Text style={styles.mapStatLabel}>LANDMARKS</Text>
             </View>
             <View style={styles.mapStat}>
-              <Text style={styles.mapStatValue}>{liveObjects.length}</Text>
-              <Text style={styles.mapStatLabel}>LIVE OBJECTS</Text>
+              <Text style={styles.mapStatValue}>{(spatialMemory.static_object_count ?? mapStaticObjects.length) || liveStaticObjects.length}</Text>
+              <Text style={styles.mapStatLabel}>STATIC OBJ</Text>
+            </View>
+            <View style={styles.mapStat}>
+              <Text style={styles.mapStatValue}>{spatialMemory.live_dynamic_count ?? liveDynamicObjects.length}</Text>
+              <Text style={styles.mapStatLabel}>DYNAMIC</Text>
             </View>
             <View style={styles.mapStat}>
               <Text style={styles.mapStatValue}>{isConnected ? "ON" : "OFF"}</Text>
@@ -749,31 +777,60 @@ export default function App() {
                   strokeWidth="0.5"
                 />
               ))}
+              {mapPath.length > 1 && (
+                <Polyline
+                  points={mapPath.map(([z, x]) => `${Number(x)},${Number(z)}`).join(" ")}
+                  fill="none"
+                  stroke="#22c55e"
+                  strokeWidth="1.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity="0.95"
+                />
+              )}
+              {mapStaticObjects.map((object, index) => (
+                <Circle
+                  key={`static-object-${object.id || index}`}
+                  cx={Number(object.grid_x ?? object.x ?? 50)}
+                  cy={Number(object.grid_z ?? object.z ?? 50)}
+                  r="2"
+                  fill={getObjectColor({ ...object, mobility: "static" })}
+                  stroke="#e0f2fe"
+                  strokeWidth="0.35"
+                  opacity="0.9"
+                />
+              ))}
               {liveObjects.map((object, index) => {
-                const label = String(object.label || object.detected_label || "").toLowerCase();
-                const isExit = label.includes("exit");
-                const isDoor = label.includes("door");
-                const fill = isExit ? "#22f59c" : isDoor ? "#facc15" : "#fb7185";
+                const mobility = getObjectMobility(object);
+                const fill = getObjectColor(object);
                 return (
                   <Circle
                     key={`live-object-${index}`}
                     cx={Number(object.x ?? 50)}
                     cy={Number(object.z ?? 50)}
-                    r={isExit || isDoor ? "2.8" : "2.1"}
+                    r={mobility === "static" ? "2.2" : "2.7"}
                     fill={fill}
                     stroke="#f8fafc"
                     strokeWidth="0.45"
                   />
                 );
               })}
-              <Circle cx="50" cy="50" r="2.6" fill="#38bdf8" stroke="#e0f2fe" strokeWidth="0.8" />
+              <Circle
+                cx={Number(userGrid.x ?? 50)}
+                cy={Number(userGrid.z ?? 50)}
+                r="2.6"
+                fill="#38bdf8"
+                stroke="#e0f2fe"
+                strokeWidth="0.8"
+              />
             </Svg>
           </View>
 
           <View style={styles.legendRow}>
             <Text style={styles.legendText}>Blue: user</Text>
-            <Text style={styles.legendText}>Yellow/green: landmark</Text>
-            <Text style={styles.legendText}>Pink: live object</Text>
+            <Text style={styles.legendText}>Green/yellow: exit or door</Text>
+            <Text style={styles.legendText}>Cyan: static object</Text>
+            <Text style={styles.legendText}>Orange: dynamic object</Text>
           </View>
 
           <View style={styles.mapActions}>
@@ -786,6 +843,9 @@ export default function App() {
             <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-navigation", { goal_type: "exit" })}>
               <Text style={styles.mapActionText}>FIND EXIT</Text>
             </Pressable>
+            <Pressable style={[styles.mapActionButton, styles.unloadButton]} onPress={() => runMapAction("/unload-map")}>
+              <Text style={styles.mapActionText}>UNLOAD</Text>
+            </Pressable>
           </View>
 
           {!!mapActionStatus && (
@@ -797,7 +857,7 @@ export default function App() {
               <View>
                 <Text style={styles.savedMapName}>{item.map_name}</Text>
                 <Text style={styles.savedMapMeta}>
-                  {item.landmark_count} landmarks | {Number(item.coverage_percent || 0).toFixed(1)}% coverage
+                  {item.landmark_count} landmarks | {item.static_object_count ?? 0} static | {Number(item.coverage_percent || 0).toFixed(1)}% coverage
                 </Text>
               </View>
               <Pressable style={styles.loadButton} onPress={() => runMapAction("/load-map", { map_id: item.map_id })}>
@@ -930,10 +990,18 @@ export default function App() {
 
         <Text style={styles.sectionTitle}>LIVE DETECTIONS</Text>
 
-        {data?.detections?.map((item, index) => (
-          <View key={index} style={styles.objectCard}>
-            <View>
-              <Text style={styles.objectName}>{item.object}</Text>
+        {data?.detections?.map((item, index) => {
+          const mobility = getObjectMobility(item);
+          const color = getObjectColor(item);
+          return (
+          <View key={index} style={[styles.objectCard, { borderLeftColor: color }]}>
+            <View style={{ flex: 1 }}>
+              <View style={styles.objectTitleRow}>
+                <Text style={styles.objectName}>{item.object}</Text>
+                <View style={[styles.classificationBadge, { backgroundColor: color }]}>
+                  <Text style={styles.classificationText}>{mobility.toUpperCase()}</Text>
+                </View>
+              </View>
               <Text style={styles.objectMeta}>
                 {item.position} · {item.distance}
               </Text>
@@ -943,7 +1011,8 @@ export default function App() {
               {item.depth_meters ? `${item.depth_meters.toFixed(2)}m` : "N/A"}
             </Text>
           </View>
-        ))}
+          );
+        })}
 
         <Text style={styles.sectionTitle}>COMMAND HISTORY</Text>
 
@@ -1357,6 +1426,14 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
+    borderLeftWidth: 6,
+    gap: 10,
+  },
+  objectTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 8,
   },
   objectName: {
     color: "#020617",
@@ -1373,6 +1450,17 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     fontWeight: "900",
     fontSize: 15,
+  },
+  classificationBadge: {
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  classificationText: {
+    color: "#020617",
+    fontSize: 9,
+    fontWeight: "900",
+    letterSpacing: 0.5,
   },
   historyCard: {
     backgroundColor: "#0f172a",
@@ -1482,15 +1570,20 @@ const styles = StyleSheet.create({
   },
   mapActions: {
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 8,
     marginBottom: 12,
   },
   mapActionButton: {
     flex: 1,
+    minWidth: "46%",
     backgroundColor: "#1d4ed8",
     borderRadius: 14,
     paddingVertical: 12,
     alignItems: "center",
+  },
+  unloadButton: {
+    backgroundColor: "#475569",
   },
   mapActionText: {
     color: "#f8fafc",

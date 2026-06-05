@@ -13,7 +13,7 @@ from sqlalchemy import select
 import heapq
 import numpy as np
 from semantic_navigation import SemanticNavigator
-from spatial_memory import SpatialMemoryNavigationSystem
+from spatial_memory import SpatialMemoryNavigationSystem, classify_object_mobility, object_color_for_label
 
 # Global Navigation Goal: grid row Z, grid col X (default 3m forward)
 current_goal = (80, 50)
@@ -92,13 +92,41 @@ doorway_transition_awaiting_answer = False
 doorway_transition_context = None
 
 
+def _object_mobility(label, fallback=None):
+    if fallback in {"static", "dynamic"}:
+        return fallback
+    return classify_object_mobility(label)
+
+
+def _object_color(label, mobility=None):
+    return object_color_for_label(label, mobility)
+
+
+def _format_llm_detection(d):
+    label = d.get("semantic_label") or d.get("class_name") or d.get("object")
+    mobility = _object_mobility(label, d.get("mobility") or d.get("classification"))
+    return {
+        "class": label,
+        "position": d.get("position"),
+        "distance": d.get("distance"),
+        "classification": mobility,
+        "mobility": mobility,
+        "confidence": round(float(d.get("confidence", 0.0)), 2),
+        "depth_meters": d.get("depth_meters"),
+    }
+
+
 def get_live_spatial_snapshot():
     with zva.frame_lock:
         grid = [row[:] for row in zva.occupancy_grid]
         semantic_objects = [obj.copy() for obj in getattr(zva, "semantic_objects", [])]
         for obj in semantic_objects:
             label = str(obj.get("label") or obj.get("detected_label") or "").lower()
-            if label in {"person"}:
+            mobility = _object_mobility(label, obj.get("mobility") or obj.get("classification"))
+            obj["classification"] = mobility
+            obj["mobility"] = mobility
+            obj["color"] = obj.get("color") or _object_color(label, mobility)
+            if mobility != "static":
                 continue
             gx = obj.get("x")
             gz = obj.get("z")
@@ -459,6 +487,11 @@ async def telemetry_stream(websocket: WebSocket):
                         x_c = coords.get("x", 0.0)
                         z_c = coords.get("z", 0.0)
                         class_name = obj.get("class", "object")
+                        mobility = _object_mobility(
+                            class_name,
+                            obj.get("mobility") or obj.get("classification"),
+                        )
+                        object_color = obj.get("color") or _object_color(class_name, mobility)
                         
                         # Project local camera coords to world coordinates
                         x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
@@ -468,17 +501,24 @@ async def telemetry_stream(websocket: WebSocket):
                         grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
                         grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
                         
-                        # Mark occupancy grid cells around the object as obstacles
-                        for dr in [-1, 0, 1]:
-                            for dc in [-1, 0, 1]:
-                                r_idx = max(0, min(grid_z + dr, 99))
-                                c_idx = max(0, min(grid_x + dc, 99))
-                                zva.occupancy_grid[r_idx][c_idx] = 1
+                        # Persist only static objects into the room occupancy layer.
+                        if mobility == "static":
+                            for dr in [-1, 0, 1]:
+                                for dc in [-1, 0, 1]:
+                                    r_idx = max(0, min(grid_z + dr, 99))
+                                    c_idx = max(0, min(grid_x + dc, 99))
+                                    zva.occupancy_grid[r_idx][c_idx] = 1
                         
                         zva.semantic_objects.append({
                             "label": class_name,
+                            "detected_label": class_name,
+                            "classification": mobility,
+                            "mobility": mobility,
+                            "color": object_color,
                             "x": grid_x,
-                            "z": grid_z
+                            "z": grid_z,
+                            "distance": z_c,
+                            "confidence": float(obj.get("confidence", 1.0)),
                         })
                         
                         # Determine position (left, center, right)
@@ -491,6 +531,10 @@ async def telemetry_stream(websocket: WebSocket):
                             
                         zva.latest_detections.append({
                             "class_name": class_name,
+                            "semantic_label": class_name,
+                            "classification": mobility,
+                            "mobility": mobility,
+                            "color": object_color,
                             "position": pos_lbl,
                             "distance": obj.get("distance_category", "medium"),
                             "depth_meters": z_c,
@@ -526,29 +570,50 @@ def status():
         detections = [
             {
                 "object": d["class_name"],
+                "semantic_label": d.get("semantic_label", d["class_name"]),
                 "position": d["position"],
                 "distance": d["distance"],
                 "depth_meters": d.get("depth_meters"),
+                "classification": _object_mobility(
+                    d.get("semantic_label", d["class_name"]),
+                    d.get("mobility") or d.get("classification"),
+                ),
+                "mobility": _object_mobility(
+                    d.get("semantic_label", d["class_name"]),
+                    d.get("mobility") or d.get("classification"),
+                ),
+                "color": d.get("color") or _object_color(
+                    d.get("semantic_label", d["class_name"]),
+                    d.get("mobility") or d.get("classification"),
+                ),
                 "confidence": round(d["confidence"], 2)
             }
             for d in zva.latest_detections
         ]
         
-        # Calculate grid position of the user
-        tx_m = zva.pose_data.get("x", 0.0) / 1000.0
-        tz_m = zva.pose_data.get("z", 0.0) / 1000.0
-        user_grid_x = max(0, min(int(tx_m / 0.1) + 50, 99))
-        user_grid_z = max(0, min(int(tz_m / 0.1) + 50, 99))
-        
-        # Calculate A* path
-        if current_goal is None:
+        current_map = spatial_memory.state.get("current_map")
+        user_grid_z, user_grid_x = spatial_memory.pose_to_grid(zva.pose_data)
+        status_grid = current_map.get("static_grid") if current_map else zva.occupancy_grid
+
+        if spatial_memory.state.get("active_path"):
+            path = spatial_memory.state.get("active_path", [])
+            active_goal = spatial_memory.state.get("active_goal")
+            goal_data = {"x": active_goal[1], "z": active_goal[0]} if active_goal else None
+        elif current_goal is None:
             path = []
             goal_data = None
         else:
-            path = astar_pathfind(zva.occupancy_grid, (user_grid_z, user_grid_x), current_goal)
+            path = astar_pathfind(status_grid, (user_grid_z, user_grid_x), current_goal)
             goal_data = {"x": current_goal[1], "z": current_goal[0]}
 
-        current_map = spatial_memory.state.get("current_map")
+        live_objects = spatial_memory.semantic_objects_to_current_map(
+            getattr(zva, "semantic_objects", [])
+        )
+        live_static_count = sum(1 for obj in live_objects if _object_mobility(
+            obj.get("label") or obj.get("detected_label"),
+            obj.get("mobility") or obj.get("classification"),
+        ) == "static")
+        live_dynamic_count = max(0, len(live_objects) - live_static_count)
 
         return {
             "guidance": zva.guidance_cmd,
@@ -557,16 +622,21 @@ def status():
             "right_distance": zva.zones_data.get("right", 0),
             "detections": detections,
             "pose": zva.pose_data,
-            "map": zva.occupancy_grid,
+            "map": status_grid,
             "path": path,
             "goal": goal_data,
             "user_grid": {"x": user_grid_x, "z": user_grid_z},
-            "objects": getattr(zva, "semantic_objects", []),
+            "objects": live_objects,
             "spatial_memory": {
                 "mode": spatial_memory.state.get("mode"),
                 "current_map_id": spatial_memory.state.get("current_map_id"),
                 "current_map_name": current_map.get("map_name") if current_map else None,
                 "landmark_count": _landmark_count(current_map),
+                "static_object_count": len(current_map.get("static_objects", [])) if current_map else 0,
+                "live_static_count": live_static_count,
+                "live_dynamic_count": live_dynamic_count,
+                "tracking_ok": bool(zva.pose_data.get("tracking_ok")),
+                "tracking_state": zva.pose_data.get("tracking_state", "UNKNOWN"),
                 "mapping_prompt_pending": mapping_prompt_pending,
                 "mapping_prompt_awaiting_answer": mapping_prompt_awaiting_answer,
                 "doorway_transition_awaiting_answer": doorway_transition_awaiting_answer,
@@ -1362,12 +1432,14 @@ def map_view():
                 item.className = 'detection-item';
                 
                 let depthStr = d.depth_meters ? d.depth_meters.toFixed(1) + 'm' : d.distance;
+                const mobility = (d.mobility || d.classification || 'dynamic').toUpperCase();
+                const color = d.color || (mobility === 'STATIC' ? '#38bdf8' : '#f97316');
                 item.innerHTML = `
                     <div>
                         <span class="detection-name">${d.object}</span>
-                        <span class="detection-meta">(${d.position})</span>
+                        <span class="detection-meta">(${d.position} | ${mobility})</span>
                     </div>
-                    <div style="font-weight:600;">${depthStr}</div>
+                    <div style="font-weight:600;color:${color};">${depthStr}</div>
                 `;
                 listEl.appendChild(item);
             });
@@ -1446,8 +1518,11 @@ def map_view():
             objects.forEach(obj => {
                 const oX = obj.x * cellW + cellW/2;
                 const oY = obj.z * cellH + cellH/2;
+                const label = (obj.label || obj.detected_label || 'object').toLowerCase();
+                const mobility = obj.mobility || obj.classification || 'dynamic';
+                const color = obj.color || (mobility === 'static' ? '#38bdf8' : '#f97316');
                 
-                if (obj.label === "exit sign") {
+                if (label === "exit sign") {
                     ctx.fillStyle = "#10b981";
                     ctx.beginPath();
                     if (ctx.roundRect) {
@@ -1463,30 +1538,23 @@ def map_view():
                     ctx.textBaseline = "middle";
                     ctx.fillText("EXIT", oX, oY);
                 } else {
-                    let color = "#38bdf8"; // Person: Cyan
-                    if (obj.label === "chair" || obj.label === "couch") color = "#fb923c"; // Orange
-                    else if (obj.label.includes("table")) color = "#c084fc"; // Purple
-                    else if (obj.label === "bottle" || obj.label === "cup") color = "#f472b6"; // Pink
-                    else color = "#fbbf24"; // default amber
-                    
                     ctx.beginPath();
                     ctx.fillStyle = color;
-                    ctx.arc(oX, oY, 4, 0, 2 * Math.PI);
+                    ctx.arc(oX, oY, mobility === 'static' ? 4 : 5, 0, 2 * Math.PI);
                     ctx.fill();
                     
                     ctx.fillStyle = "#f8fafc";
                     ctx.font = "8px Outfit, sans-serif";
                     ctx.textAlign = "center";
-                    ctx.fillText(obj.label, oX, oY - 7);
+                    ctx.fillText(label, oX, oY - 7);
                 }
             });
             
             // Draw User
             if (data.pose) {
-                const tx_m = (data.pose.x || 0.0) / 1000.0;
-                const tz_m = (data.pose.z || 0.0) / 1000.0;
-                const gridX = Math.max(0, Math.min(Math.floor(tx_m / 0.1) + 50, 99));
-                const gridZ = Math.max(0, Math.min(Math.floor(tz_m / 0.1) + 50, 99));
+                const userGrid = data.user_grid || {};
+                const gridX = Math.max(0, Math.min(userGrid.x ?? 50, 99));
+                const gridZ = Math.max(0, Math.min(userGrid.z ?? 50, 99));
                 
                 const uX = gridX * cellW + cellW/2;
                 const uY = gridZ * cellH + cellH/2;
@@ -1555,16 +1623,7 @@ def manual_command(payload: dict):
         guidance = zva.guidance_cmd
         zones_data = dict(zva.zones_data)
 
-    llm_detections = [
-        {
-            "class": d["class_name"],
-            "position": d["position"],
-            "distance": d["distance"],
-            "confidence": round(d["confidence"], 2),
-            "depth_meters": d.get("depth_meters"),
-        }
-        for d in detections
-    ]
+    llm_detections = [_format_llm_detection(d) for d in detections]
 
     response = ask_llm(
         question=command_text,
@@ -1623,6 +1682,7 @@ def save_spatial_map():
         "map_name": current_map["map_name"],
         "file_name": f"{current_map['map_id']}.json",
         "landmark_count": len(current_map.get("landmarks", [])),
+        "static_object_count": len(current_map.get("static_objects", [])),
         "grid_counts": current_map.get("metadata", {}).get("grid_counts", {}),
         "coverage_percent": current_map.get("metadata", {}).get("coverage_percent", 0.0),
     }
@@ -1645,13 +1705,24 @@ def list_spatial_maps():
 
 @app.post("/load-map")
 def load_spatial_map(payload: dict):
+    snapshot = get_live_spatial_snapshot()
     map_data = spatial_memory.load_map(
         map_id=payload.get("map_id"),
         map_name=payload.get("map_name"),
+        anchor_pose=snapshot["pose"],
     )
     if not map_data:
         raise HTTPException(status_code=404, detail="Map not found.")
     return {"status": "loaded", "map": map_data}
+
+
+@app.post("/unload-map")
+def unload_spatial_map():
+    spatial_memory.unload_map()
+    return {
+        "status": "unloaded",
+        "message": "Map unloaded. Live sensing remains active, but no saved room map is selected.",
+    }
 
 
 @app.post("/set-current-map")
@@ -1733,16 +1804,7 @@ async def voice_command(file: UploadFile = File(...)):
         guidance = zva.guidance_cmd
         zones_data = dict(zva.zones_data)
 
-    llm_detections = [
-        {
-            "class": d["class_name"],
-            "position": d["position"],
-            "distance": d["distance"],
-            "confidence": round(d["confidence"], 2),
-            "depth_meters": d.get("depth_meters"),
-        }
-        for d in detections
-    ]
+    llm_detections = [_format_llm_detection(d) for d in detections]
 
     snapshot = get_live_spatial_snapshot()
 
@@ -1863,16 +1925,7 @@ def text_command(payload: dict):
         guidance = zva.guidance_cmd
         zones_data = dict(zva.zones_data)
 
-    llm_detections = [
-        {
-            "class": d["class_name"],
-            "position": d["position"],
-            "distance": d["distance"],
-            "confidence": round(d["confidence"], 2),
-            "depth_meters": d.get("depth_meters"),
-        }
-        for d in detections
-    ]
+    llm_detections = [_format_llm_detection(d) for d in detections]
 
     snapshot = get_live_spatial_snapshot()
 

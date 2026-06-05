@@ -38,5 +38,33 @@
   "room_1780633051": {
     "name": "Room",
     "exits": []
+  },
+  "room_1780636178": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780636658": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780636690": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780636792": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780638797": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780641349": {
+    "name": "Room",
+    "exits": []
+  },
+  "room_1780641834": {
+    "name": "Room",
+    "exits": []
   }
 }

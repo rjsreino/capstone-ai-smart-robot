@@ -121,6 +121,26 @@ ALLOWED_CLASSES = {
     "open_door", "closed_door", "door_local", "exit_sign"
 }
 
+STATIC_OBJECT_CLASSES = {
+    "bench", "chair", "couch", "dining table", "table",
+    "bed", "tv", "potted plant", "door", "open door",
+    "closed door", "doorway", "door local", "exit sign",
+    "open_door", "closed_door", "door_local", "exit_sign",
+}
+
+DYNAMIC_OBJECT_CLASSES = {
+    "person", "backpack", "handbag", "suitcase", "bottle",
+    "cup", "cell phone", "laptop", "book", "keyboard",
+    "mouse", "remote",
+}
+
+OBJECT_CLASSIFICATION_COLORS = {
+    "static": "#38bdf8",
+    "dynamic": "#f97316",
+    "landmark": "#facc15",
+    "exit": "#22f59c",
+}
+
 STATIC_NAVIGATION_LABELS = {
     "door": "door",
     "open door": "doorway",
@@ -137,6 +157,37 @@ STATIC_NAVIGATION_LABELS = {
 
 def normalize_detection_label(label: str) -> str:
     return str(label or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def classify_object_mobility(label: str) -> str:
+    normalized = normalize_detection_label(label)
+    semantic_label = STATIC_NAVIGATION_LABELS.get(normalized, normalized)
+    if normalized in STATIC_OBJECT_CLASSES or semantic_label in STATIC_OBJECT_CLASSES:
+        return "static"
+    if normalized in DYNAMIC_OBJECT_CLASSES or semantic_label in DYNAMIC_OBJECT_CLASSES:
+        return "dynamic"
+    return "dynamic"
+
+
+def object_color_for_label(label: str, mobility: str | None = None) -> str:
+    normalized = normalize_detection_label(label)
+    semantic_label = STATIC_NAVIGATION_LABELS.get(normalized, normalized)
+    if "exit" in semantic_label:
+        return OBJECT_CLASSIFICATION_COLORS["exit"]
+    if "door" in semantic_label:
+        return OBJECT_CLASSIFICATION_COLORS["landmark"]
+    resolved_mobility = mobility or classify_object_mobility(normalized)
+    return OBJECT_CLASSIFICATION_COLORS.get(resolved_mobility, OBJECT_CLASSIFICATION_COLORS["dynamic"])
+
+
+def hex_to_bgr(hex_color: str) -> tuple[int, int, int]:
+    color = str(hex_color or "").lstrip("#")
+    if len(color) != 6:
+        return (255, 255, 255)
+    r = int(color[0:2], 16)
+    g = int(color[2:4], 16)
+    b = int(color[4:6], 16)
+    return (b, g, r)
 
 
 def looks_like_exit_sign(frame: np.ndarray, box: tuple[int, int, int, int]) -> bool:
@@ -232,7 +283,16 @@ safe_distance_threshold = 1200.0  # mm
 guidance_cmd = "STOP"
 guidance_color = (0, 0, 255)
 zones_data = {'left': 0.0, 'center': 0.0, 'right': 0.0}
-pose_data = {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+pose_data = {
+    "x": 0.0,
+    "y": 0.0,
+    "z": 0.0,
+    "roll": 0.0,
+    "pitch": 0.0,
+    "yaw": 0.0,
+    "tracking_ok": False,
+    "tracking_state": "DISABLED",
+}
 occupancy_grid = np.zeros((100, 100), dtype=np.int8).tolist()
 reset_map_flag = False
 semantic_objects = []
@@ -387,7 +447,10 @@ async def telemetry_sender_loop():
                     "tracking_id": idx,
                     "class": d["class_name"],
                     "3d_coordinates": {"x": lateral_offset, "y": 0.0, "z": depth_m},
-                    "distance_category": d["distance"]
+                    "distance_category": d["distance"],
+                    "classification": d.get("classification", d.get("mobility", "dynamic")),
+                    "mobility": d.get("mobility", d.get("classification", "dynamic")),
+                    "color": d.get("color", object_color_for_label(d["class_name"])),
                 })
 
             payload = {
@@ -848,9 +911,14 @@ def vision_loop():
                         grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
                         grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
                         semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+                        mobility = classify_object_mobility(semantic_label)
+                        object_color = object_color_for_label(semantic_label, mobility)
                         temp_semantic_objects.append({
                             "label": semantic_label,
                             "detected_label": class_name,
+                            "classification": mobility,
+                            "mobility": mobility,
+                            "color": object_color,
                             "source_model": model_source,
                             "x": grid_x,
                             "z": grid_z,
@@ -879,9 +947,16 @@ def vision_loop():
                             distance_lbl = "far"
 
                     position = get_position_label(center_x, w)
+                    semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+                    mobility = classify_object_mobility(semantic_label)
+                    object_color = object_color_for_label(semantic_label, mobility)
 
                     detections.append({
                         "class_name": class_name,
+                        "semantic_label": semantic_label,
+                        "classification": mobility,
+                        "mobility": mobility,
+                        "color": object_color,
                         "confidence": conf,
                         "position": position,
                         "distance": distance_lbl,
@@ -918,10 +993,9 @@ def vision_loop():
 
         for det in detections:
             x1, y1, x2, y2 = det["box"]
-            is_landmark_model = det["source_model"].startswith("landmark")
-            box_color = (0, 180, 255) if is_landmark_model else (0, 0, 255)
+            box_color = hex_to_bgr(det.get("color") or object_color_for_label(det["class_name"]))
             cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
-            label = f"{det['class_name']} | {det['position']} | {det['distance']}"
+            label = f"{det['class_name']} | {det['classification']} | {det['position']} | {det['distance']}"
             if det["depth_meters"] is not None:
                 label += f" | {det['depth_meters']:.1f}m"
 
@@ -1049,6 +1123,10 @@ def vision_loop():
         for (gx, gz), (ts, dist) in persistent_exit_signs.items():
             temp_semantic_objects.append({
                 "label": "exit sign",
+                "detected_label": "exit sign",
+                "classification": "static",
+                "mobility": "static",
+                "color": object_color_for_label("exit sign", "static"),
                 "x": gx,
                 "z": gz,
                 "distance": dist
@@ -1069,7 +1147,8 @@ def vision_loop():
             live_grid = processor.occupancy_grid.copy()
             for obj in temp_semantic_objects:
                 label = str(obj.get("label") or obj.get("detected_label") or "").lower()
-                if label == "person":
+                mobility = obj.get("mobility") or obj.get("classification") or classify_object_mobility(label)
+                if mobility != "static":
                     continue
                 gx = obj.get("x")
                 gz = obj.get("z")
@@ -1094,7 +1173,10 @@ def vision_loop():
                     "z": float(processor.tz),
                     "roll": float(processor.roll),
                     "pitch": float(processor.pitch),
-                    "yaw": float(processor.yaw)
+                    "yaw": float(processor.yaw),
+                    "tracking_ok": bool(processor.is_tracking_ok),
+                    "tracking_state": processor.tracking_state,
+                    "vslam_enabled": bool(processor.positional_tracking_enabled),
                 }
                 occupancy_grid = live_grid.tolist()
                 semantic_objects = temp_semantic_objects
