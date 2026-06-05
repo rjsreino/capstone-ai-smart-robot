@@ -58,6 +58,7 @@ export default function App() {
   const [savedMaps, setSavedMaps] = useState([]);
   const [currentMap, setCurrentMap] = useState(null);
   const [mapActionStatus, setMapActionStatus] = useState("");
+  const [pendingPrompt, setPendingPrompt] = useState(null);
 
   const lastSpoken = useRef("");
   const lastSpeakTime = useRef(0);
@@ -85,6 +86,22 @@ export default function App() {
     }
   };
 
+  const updatePendingPrompt = (json) => {
+    if (!json) return;
+
+    if (json.requires_answer && json.answer_type === "yes_no") {
+      setPendingPrompt({
+        id: json.prompt_id || json.target || "prompt",
+        guidance: json.guidance || json.response || "Please confirm.",
+      });
+      return;
+    }
+
+    if (json.prompt_resolved) {
+      setPendingPrompt(null);
+    }
+  };
+
   useEffect(() => {
   if (!serverUrl) return;
 
@@ -92,6 +109,8 @@ export default function App() {
     try {
       const response = await fetch(`${serverUrl}/autopilot-guidance`);
       const json = await response.json();
+
+      updatePendingPrompt(json);
 
       if (!json.active || !json.guidance) return;
       if (json.guidance === lastSpoken.current) return;
@@ -337,6 +356,7 @@ export default function App() {
       setLastTranscript(transcript);
       setLastResponse(answer);
       addHistory(transcript, answer);
+      updatePendingPrompt(json);
 
       lastCommandTime.current = Date.now();
 
@@ -394,6 +414,7 @@ export default function App() {
       setLastTranscript(userCommand);
       setLastResponse(answer);
       addHistory(userCommand, answer);
+      updatePendingPrompt(json);
 
       lastCommandTime.current = Date.now();
 
@@ -409,6 +430,44 @@ export default function App() {
       await speakText(answer, { interrupt: true });
     } catch (error) {
       console.log("Command error:", error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const runPromptAnswer = async (answerText) => {
+    try {
+      setIsProcessing(true);
+
+      const response = await fetch(`${serverUrl}/command`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command: answerText }),
+      });
+
+      const json = await response.json();
+      const answer = json.response || "";
+
+      setLastTranscript(answerText);
+      setLastResponse(answer);
+      addHistory(answerText, answer);
+      updatePendingPrompt(json);
+
+      lastCommandTime.current = Date.now();
+
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        interruptionModeIOS: 1,
+        shouldDuckAndroid: false,
+        playThroughEarpieceAndroid: false,
+      });
+
+      await speakText(answer, { interrupt: true });
+      await refreshMapState();
+    } catch (error) {
+      console.log("Prompt answer error:", error);
     } finally {
       setIsProcessing(false);
     }
@@ -474,6 +533,9 @@ export default function App() {
         setData(json);
         setIsConnected(true);
         setLastUpdated(new Date().toLocaleTimeString());
+        if (!json?.spatial_memory?.active_prompt) {
+          setPendingPrompt(null);
+        }
         speakGuidance(json);
       } catch {
         setIsConnected(false);
@@ -781,6 +843,27 @@ export default function App() {
           <LinearGradient colors={["#422006", "#1c1204"]} style={styles.processingBox}>
             <Text style={styles.processingText}>VICKY IS THINKING...</Text>
           </LinearGradient>
+        )}
+
+        {pendingPrompt && (
+          <View style={styles.answerPromptCard}>
+            <Text style={styles.panelLabel}>CONFIRMATION NEEDED</Text>
+            <Text style={styles.answerPromptText}>{pendingPrompt.guidance}</Text>
+            <View style={styles.answerButtonRow}>
+              <Pressable
+                style={[styles.answerButton, styles.yesButton]}
+                onPress={() => runPromptAnswer("yes")}
+              >
+                <Text style={styles.answerButtonText}>YES</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.answerButton, styles.noButton]}
+                onPress={() => runPromptAnswer("no")}
+              >
+                <Text style={styles.answerButtonText}>NO</Text>
+              </Pressable>
+            </View>
+          </View>
         )}
 
         <View style={styles.switchPanel}>
@@ -1102,6 +1185,47 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontWeight: "900",
     letterSpacing: 2,
+  },
+  answerPromptCard: {
+    backgroundColor: "rgba(8,47,73,0.94)",
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "#38bdf8",
+  },
+  answerPromptText: {
+    color: "#f8fafc",
+    fontSize: 17,
+    lineHeight: 25,
+    fontWeight: "800",
+    marginBottom: 16,
+  },
+  answerButtonRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  answerButton: {
+    flex: 1,
+    minHeight: 54,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  yesButton: {
+    backgroundColor: "#16a34a",
+    borderColor: "#86efac",
+  },
+  noButton: {
+    backgroundColor: "#991b1b",
+    borderColor: "#fca5a5",
+  },
+  answerButtonText: {
+    color: "white",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 1,
   },
   switchPanel: {
     backgroundColor: "rgba(15,23,42,0.84)",

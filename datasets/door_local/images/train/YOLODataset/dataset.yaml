@@ -1,0 +1,7 @@
+path: \\?\W:\University\Capstone\capstone-ai-smart-robot\datasets\door_local\images\train\YOLODataset
+train: images/train
+val: images/val
+test:
+
+names:
+    0: door_local

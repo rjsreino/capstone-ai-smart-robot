@@ -30,5 +30,13 @@
   "room_1780580798": {
     "name": "Room",
     "exits": []
+  },
+  "auto_room_1780582009": {
+    "name": "Auto Room",
+    "exits": []
+  },
+  "room_1780633051": {
+    "name": "Room",
+    "exits": []
   }
 }
