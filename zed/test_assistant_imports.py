@@ -21,7 +21,9 @@ def test_imports():
         "easyocr": "easyocr",
         "pygame": "pygame",
         "edge_tts": "edge-tts",
-        "ollama": "ollama"
+        "ollama": "ollama",
+        "sentence_transformers": "sentence-transformers",
+        "sklearn": "scikit-learn"
     }
     
     missing = []

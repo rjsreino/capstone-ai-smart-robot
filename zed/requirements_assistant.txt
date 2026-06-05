@@ -17,3 +17,5 @@ openwakeword
 edge-tts
 pygame
 python-multipart
+sentence-transformers
+scikit-learn
