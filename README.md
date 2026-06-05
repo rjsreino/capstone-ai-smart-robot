@@ -50,18 +50,44 @@ graph TD
 2. **Mode 2 (Distributed Pure Cloud)**: Streams compressed RGB frames and downsampled depth matrices from the Laptop to the FastAPI Server via WebSockets. The server runs YOLOv8 and depth zoning, returning closed-loop navigation commands back to the client.
 3. **Mode 3 (Edge-Cloud Hybrid)**: Runs local 15 FPS safety avoidance corridors on the Laptop, while routing high-overhead conversational VLM/LLM queries asynchronously over a cellular/Wi-Fi link to the FastAPI Cloud Server.
 
+
+---
+
+## 🧠 Intelligent Navigation & AI Models
+
+The companion assistant employs a multi-tiered AI pipeline to ensure both local safety and proactive navigation:
+
+### 1. Concurrently Running YOLOv8 Models
+The system runs multiple object detection heads in parallel on the Edge PC:
+* **Standard Safety Model (`yolov8n.pt`)**: Detects common obstacles (people, chairs, tables, bags, etc.) to ensure collision avoidance.
+* **Custom-Trained Landmark Models** (located in the `runs/` folder):
+  * `runs/detect/exit_sign_only/weights/best.pt` & `runs/detect/exit_sign_only_v2/weights/best.pt`: Specifically trained to identify exit signs in indoor environments.
+  * `runs/detect/door_local_v1/weights/best.pt`: Detects local doors, doorways, and pathways.
+
+### 2. Proactive Landmark-Seeking & Spatial Memory
+* **Mapping Mode**: Integrates ZED SLAM depth data to dynamically map 100x100 occupancy grids and pin static landmarks (doors, tables, doorways) into a persistent spatial memory graph (`map_graph.json`).
+* **Navigation Mode**: Calculates optimal paths using an A* pathfinder. The cost function goes beyond simple distance, dynamically penalizing narrow pathways, unmapped/unknown zones, and proximity to moving obstacles (like people).
+* **Vocal Guidance**: Generates real-time, yaw-aware direction prompts (e.g., *"Turn slightly left. The door is about 2.5 meters away."*).
+
+### 3. Semantic Target Matching
+* Compares incoming voice command targets (transcribed via Whisper) to current visual detections.
+* Uses the local [semantic_navigation.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/semantic_navigation.py) script with a small, lightweight `all-MiniLM-L6-v2` transformer model to run cosine similarity matches (e.g. matching *"somewhere to sit"* with a detected *"chair"* or *"bench"*).
+
 ---
 
 ## 📂 Codebase Directory Structure (`/zed`)
 * [server.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/server.py): Main unified system entrypoint. Boots the ZED camera vision loop in a background thread and exposes FastAPI REST endpoints for client voice commands, live navigation status, and mock maps.
 * [zed_depth_processor.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_depth_processor.py): Interfaces with the ZED SDK. Configured for VGA @ 15fps resolution to accommodate USB 2.0 bandwidth fallback. Calculates Left, Center, and Right obstacle distances.
 * [zed_room_guidance.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_room_guidance.py): Visual room dashboard display displaying depth heatmap streams and dynamic steering vector suggestions.
-* [zed_vision_assistant.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_vision_assistant.py): Master application loop coordinating YOLOv8, EasyOCR, wake word engine (`openwakeword` listening for *"Jarvis"*), Whisper tiny transcriber, local Ollama Phi-3 reasoner, and background WebSocket telemetry feeds.
+* [zed_vision_assistant.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/zed_vision_assistant.py): Master application loop coordinating YOLOv8 (using both standard COCO `yolov8n.pt` and custom-trained landmark/exit-sign weights), EasyOCR, wake word engine (`openwakeword` listening for *"Jarvis"*), Whisper tiny transcriber, local Ollama Phi-3 reasoner, and background WebSocket telemetry feeds.
+* [semantic_navigation.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/semantic_navigation.py): Implements semantic target matching by comparing user voice navigation queries (e.g., "take me to the door") to active YOLO detections using `sentence-transformers` (`all-MiniLM-L6-v2`) and scikit-learn cosine similarity.
+* [spatial_memory.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/spatial_memory.py): Implements room mapping and proactive landmark-seeking pathfind systems. Calculates safety grid maps, logs static landmarks (doors, doorways, exit signs, tables, etc.), runs A* path planning over dynamic obstacles, and feeds back real-time vocal guidance.
 * [vicky_edge_client.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/vicky_edge_client.py): Core edge pipe that captures frames and broadcasts text-to-speech commands locally to smartphone app clients.
 * [vicky_server.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/vicky_server.py): FastAPI server hosting the `/ws/telemetry/stream` and `/ws/video/stream` endpoints, server-side YOLO loops, and `/api/infer/vlm`.
 * [vicky_db.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/vicky_db.py): Asynchronous database logging wrapper (SQLAlchemy fallback to SQLite `vicky_logs.db`).
 * [vicky_benchmarker.py](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/vicky_benchmarker.py): Simulation harness that tests safety reaction time (SRT) under packet loss, RTT delays, and bandwidth constraints.
 * [hud.html](file:///c:/Users/RJS/Documents/세종대/Coding%20Workspace/Capstone%20Design%20AI%20Smart%20Robot/capstone-ai-smart-robot/zed/templates/hud.html): HTML5/JavaScript dashboard rendering live video streams, 10m x 10m Bird's Eye View (BEV) obstacle tracks, and latency charts.
+
 
 ---
 
