@@ -1,0 +1,13 @@
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['door_local']
+
+roboflow:
+  workspace: door-object-detection
+  project: door-detection-26wc3
+  version: 4
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/door-object-detection/door-detection-26wc3/dataset/4

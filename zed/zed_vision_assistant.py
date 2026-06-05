@@ -66,7 +66,7 @@ COCO_MODEL_PATH = "yolov8n.pt"
 DEFAULT_LANDMARK_MODEL_PATHS = (
     "runs/detect/exit_sign_only/weights/best.pt;"
     "runs/detect/exit_sign_only_v2/weights/best.pt;"
-    "runs/detect/door_local_v1/weights/best.pt"
+    "runs/detect/door_combined_v1/weights/best.pt"
 )
 LANDMARK_MODEL_PATHS = [
     path.strip()
@@ -77,6 +77,7 @@ COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.20"))
 COCO_IMAGE_SIZE = int(os.getenv("VICKY_COCO_IMGSZ", "320"))
 LANDMARK_CONFIDENCE = float(os.getenv("VICKY_LANDMARK_CONF", "0.10"))
 LANDMARK_IMAGE_SIZE = int(os.getenv("VICKY_LANDMARK_IMGSZ", "640"))
+CUSTOM_SUPPRESS_IOU = float(os.getenv("VICKY_CUSTOM_SUPPRESS_IOU", "0.40"))
 EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.45"))
 EXIT_SIGN_MAX_AREA_RATIO = float(os.getenv("VICKY_EXIT_SIGN_MAX_AREA", "0.12"))
 MIC_INDEX = -1             # -1 for auto-detect microphone index
@@ -156,6 +157,30 @@ def looks_like_exit_sign(frame: np.ndarray, box: tuple[int, int, int, int]) -> b
     sign_color_ratio = float(cv2.countNonZero(green_mask | yellow_mask)) / max(roi.shape[0] * roi.shape[1], 1)
 
     return sign_color_ratio >= 0.025
+
+
+def box_iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) -> float:
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0, inter_x2 - inter_x1)
+    inter_h = max(0, inter_y2 - inter_y1)
+    inter_area = inter_w * inter_h
+    if inter_area <= 0:
+        return 0.0
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+    union_area = area_a + area_b - inter_area
+    return inter_area / union_area if union_area > 0 else 0.0
+
+
+def is_priority_landmark(class_name: str) -> bool:
+    semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+    return semantic_label in {"door", "doorway", "exit sign"}
 
 
 def resolve_model_path(model_path: str) -> str:
@@ -831,6 +856,7 @@ def vision_loop():
                             "z": grid_z,
                             "distance": depth_distance,
                             "confidence": conf,
+                            "box": (x1, y1, x2, y2),
                         })
 
                         if depth_distance < 0.8:
@@ -865,24 +891,49 @@ def vision_loop():
                         "source_model": model_source,
                     })
 
-                    # Draw YOLO bounding box & distance label
-                    box_color = (0, 180, 255) if is_landmark_model else (0, 0, 255)
-                    cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
-                    label = f"{class_name} | {position} | {distance_lbl}"
-                    if depth_distance is not None:
-                        label += f" | {depth_distance:.1f}m"
+        priority_landmark_boxes = [
+            det["box"]
+            for det in detections
+            if det["source_model"].startswith("landmark") and is_priority_landmark(det["class_name"])
+        ]
 
-                    cv2.putText(
-                        annotated,
-                        label,
-                        (x1, max(y1 - 10, 25)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55,
-                        (255, 255, 255),
-                        2
-                    )
+        if priority_landmark_boxes:
+            detections = [
+                det for det in detections
+                if not (
+                    det["source_model"] == "coco"
+                    and any(box_iou(det["box"], landmark_box) > CUSTOM_SUPPRESS_IOU for landmark_box in priority_landmark_boxes)
+                )
+            ]
+            temp_semantic_objects = [
+                obj for obj in temp_semantic_objects
+                if not (
+                    obj.get("source_model") == "coco"
+                    and "box" in obj
+                    and any(box_iou(tuple(obj["box"]), landmark_box) > CUSTOM_SUPPRESS_IOU for landmark_box in priority_landmark_boxes)
+                )
+            ]
 
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
+
+        for det in detections:
+            x1, y1, x2, y2 = det["box"]
+            is_landmark_model = det["source_model"].startswith("landmark")
+            box_color = (0, 180, 255) if is_landmark_model else (0, 0, 255)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
+            label = f"{det['class_name']} | {det['position']} | {det['distance']}"
+            if det["depth_meters"] is not None:
+                label += f" | {det['depth_meters']:.1f}m"
+
+            cv2.putText(
+                annotated,
+                label,
+                (x1, max(y1 - 10, 25)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                2
+            )
 
         # 3. Exit Sign Detection (OCR + Green Color Segmentation)
         now = time.time()

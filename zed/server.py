@@ -82,11 +82,14 @@ AUTO_MAPPING_NAME = os.getenv("VICKY_AUTO_MAP_NAME", "Auto Room")
 AUTO_MAPPING_SAVE_INTERVAL = float(os.getenv("VICKY_AUTO_MAP_SAVE_INTERVAL", "5.0"))
 AUTO_MAPPING_MIN_LANDMARKS = int(os.getenv("VICKY_AUTO_MAP_MIN_LANDMARKS", "1"))
 MAPPING_PROMPT_ENABLED = os.getenv("VICKY_MAPPING_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
+DOORWAY_TRANSITION_PROMPT_ENABLED = os.getenv("VICKY_DOORWAY_TRANSITION_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
 
 auto_mapping_thread = None
 auto_mapping_running = False
 mapping_prompt_pending = MAPPING_PROMPT_ENABLED
 mapping_prompt_awaiting_answer = False
+doorway_transition_awaiting_answer = False
+doorway_transition_context = None
 
 
 def get_live_spatial_snapshot():
@@ -213,6 +216,133 @@ def _start_exit_navigation_response(command_text, snapshot):
     }
 
 
+def _is_yes_response(command_text):
+    normalized = str(command_text or "").strip().lower()
+    tokens = set(normalized.replace(".", " ").replace(",", " ").replace("!", " ").split())
+    return bool(tokens & {"yes", "yeah", "yep", "sure", "okay", "ok", "start"}) or "please do" in normalized
+
+
+def _is_no_response(command_text):
+    normalized = str(command_text or "").strip().lower()
+    tokens = set(normalized.replace(".", " ").replace(",", " ").replace("!", " ").split())
+    return bool(tokens & {"no", "nope", "cancel"}) or any(
+        phrase in normalized for phrase in ["not now", "do not", "don't"]
+    )
+
+
+def _next_room_name():
+    room_count = 0
+    for item in spatial_memory.list_maps():
+        name = str(item.get("map_name") or "").strip().lower()
+        if name.startswith("room"):
+            room_count += 1
+    return f"Room {room_count + 1}"
+
+
+def _doorway_transition_prompt_payload():
+    context = doorway_transition_context or {}
+    door_type = context.get("door_type", "doorway")
+    return {
+        "active": True,
+        "guidance": (
+            f"You reached the {door_type}. Are you entering a new room? "
+            "Say yes or press yes to start mapping it."
+        ),
+        "target": "new_room_mapping",
+        "source": "doorway_transition_prompt",
+        "requires_answer": True,
+        "answer_type": "yes_no",
+        "prompt_id": "new_room_mapping",
+        "options": ["yes", "no"],
+    }
+
+
+def _start_new_room_mapping_from_transition(snapshot):
+    global doorway_transition_awaiting_answer, doorway_transition_context
+    context = doorway_transition_context or {}
+    doorway_transition_awaiting_answer = False
+
+    room_name = _next_room_name()
+    previous_map_id = context.get("from_map_id")
+    previous_door_id = context.get("door_id")
+
+    current_map = spatial_memory.start_mapping(
+        map_name=room_name,
+        live_grid=snapshot["grid"],
+        semantic_objects=snapshot["semantic_objects"],
+        pose=snapshot["pose"],
+    )
+
+    if previous_map_id and previous_door_id:
+        try:
+            spatial_memory.link_map_door(
+                map_id=previous_map_id,
+                door_id=previous_door_id,
+                target_map_id=current_map["map_id"],
+                target_door_id=None,
+            )
+        except Exception as exc:
+            print(f"[SPATIAL MEMORY] Could not link doorway transition: {exc}")
+
+    doorway_transition_context = None
+    return {
+        "transcript": "yes",
+        "response": (
+            f"New room mapping started for {current_map['map_name']}. "
+            "Please slowly look around this room so I can find doors, exits, and obstacles."
+        ),
+        "prompt_resolved": True,
+        "prompt_id": "new_room_mapping",
+    }
+
+
+def _handle_pending_yes_no_prompt(command_text, snapshot):
+    global mapping_prompt_awaiting_answer
+    global doorway_transition_awaiting_answer, doorway_transition_context
+
+    if doorway_transition_awaiting_answer:
+        if _is_yes_response(command_text):
+            return _start_new_room_mapping_from_transition(snapshot)
+        if _is_no_response(command_text):
+            doorway_transition_awaiting_answer = False
+            doorway_transition_context = None
+            return {
+                "transcript": command_text,
+                "response": "Okay. I will keep the current map loaded and will not start a new room map yet.",
+                "prompt_resolved": True,
+                "prompt_id": "new_room_mapping",
+            }
+
+    if mapping_prompt_awaiting_answer:
+        if _is_yes_response(command_text):
+            mapping_prompt_awaiting_answer = False
+            current_map = spatial_memory.start_mapping(
+                map_name=AUTO_MAPPING_NAME,
+                live_grid=snapshot["grid"],
+                semantic_objects=snapshot["semantic_objects"],
+                pose=snapshot["pose"],
+            )
+            return {
+                "transcript": command_text,
+                "response": (
+                    f"Mapping started for {current_map['map_name']}. "
+                    "Please slowly look around the room. Turn left and right so I can find doors, exits, and obstacles."
+                ),
+                "prompt_resolved": True,
+                "prompt_id": "start_mapping",
+            }
+        if _is_no_response(command_text):
+            mapping_prompt_awaiting_answer = False
+            return {
+                "transcript": command_text,
+                "response": "Okay. I will not start mapping yet. Say start mapping when you are ready.",
+                "prompt_resolved": True,
+                "prompt_id": "start_mapping",
+            }
+
+    return None
+
+
 def auto_mapping_loop():
     last_save_at = 0.0
     while auto_mapping_running:
@@ -263,11 +393,14 @@ def stop_auto_mapping():
 @app.on_event("startup")
 async def startup_event():
     global mapping_prompt_pending, mapping_prompt_awaiting_answer
+    global doorway_transition_awaiting_answer, doorway_transition_context
     spatial_memory.stop_mapping()
     spatial_memory.stop_navigation()
     navigator.stop_navigation()
     mapping_prompt_pending = MAPPING_PROMPT_ENABLED
     mapping_prompt_awaiting_answer = False
+    doorway_transition_awaiting_answer = False
+    doorway_transition_context = None
     await db_logger.start()
     start_auto_mapping()
 
@@ -436,12 +569,19 @@ def status():
                 "landmark_count": _landmark_count(current_map),
                 "mapping_prompt_pending": mapping_prompt_pending,
                 "mapping_prompt_awaiting_answer": mapping_prompt_awaiting_answer,
+                "doorway_transition_awaiting_answer": doorway_transition_awaiting_answer,
+                "active_prompt": (
+                    "new_room_mapping" if doorway_transition_awaiting_answer
+                    else "start_mapping" if mapping_prompt_awaiting_answer
+                    else None
+                ),
             },
         }
         
 @app.get("/autopilot-guidance")
 def autopilot_guidance():
     global mapping_prompt_pending, mapping_prompt_awaiting_answer
+    global doorway_transition_awaiting_answer, doorway_transition_context
     snapshot = get_live_spatial_snapshot()
     spatial_mode = spatial_memory.state.get("mode")
 
@@ -452,6 +592,24 @@ def autopilot_guidance():
         )
         instruction = guidance_payload.get("instruction")
         if guidance_payload.get("active") and instruction:
+            if (
+                DOORWAY_TRANSITION_PROMPT_ENABLED
+                and not doorway_transition_awaiting_answer
+                and "reached" in instruction.lower()
+                and ("exit" in instruction.lower() or "door" in instruction.lower())
+            ):
+                current_map = spatial_memory.state.get("current_map") or {}
+                target = spatial_memory.state.get("navigation_target") or {}
+                doorway_transition_context = {
+                    "from_map_id": current_map.get("map_id"),
+                    "from_map_name": current_map.get("map_name"),
+                    "door_id": target.get("id"),
+                    "door_type": target.get("type", "doorway"),
+                }
+                doorway_transition_awaiting_answer = True
+                spatial_memory.stop_navigation()
+                return _doorway_transition_prompt_payload()
+
             return {
                 "active": True,
                 "guidance": instruction,
@@ -459,6 +617,9 @@ def autopilot_guidance():
                 "source": "spatial_memory",
                 "navigation": guidance_payload,
             }
+
+    if doorway_transition_awaiting_answer and spatial_mode == "idle":
+        return _doorway_transition_prompt_payload()
 
     if mapping_prompt_pending and spatial_mode == "idle":
         mapping_prompt_pending = False
@@ -475,6 +636,10 @@ def autopilot_guidance():
             "guidance": guidance,
             "target": "mapping",
             "source": "mapping_prompt",
+            "requires_answer": True,
+            "answer_type": "yes_no",
+            "prompt_id": "start_mapping",
+            "options": ["yes", "no"],
         }
 
     with zva.frame_lock:
@@ -1421,8 +1586,11 @@ def manual_command(payload: dict):
 @app.post("/start-mapping")
 def start_mapping(payload: dict):
     global mapping_prompt_pending, mapping_prompt_awaiting_answer
+    global doorway_transition_awaiting_answer, doorway_transition_context
     mapping_prompt_pending = False
     mapping_prompt_awaiting_answer = False
+    doorway_transition_awaiting_answer = False
+    doorway_transition_context = None
     snapshot = get_live_spatial_snapshot()
     map_name = payload.get("map_name") or "Room"
     map_id = payload.get("map_id")
@@ -1578,30 +1746,9 @@ async def voice_command(file: UploadFile = File(...)):
 
     snapshot = get_live_spatial_snapshot()
 
-    yes_words = {"yes", "yeah", "yep", "sure", "okay", "ok", "start", "please do"}
-    no_words = {"no", "nope", "not now", "cancel", "don't", "do not"}
-    if mapping_prompt_awaiting_answer:
-        if any(word in command_text for word in yes_words):
-            mapping_prompt_awaiting_answer = False
-            current_map = spatial_memory.start_mapping(
-                map_name=AUTO_MAPPING_NAME,
-                live_grid=snapshot["grid"],
-                semantic_objects=snapshot["semantic_objects"],
-                pose=snapshot["pose"],
-            )
-            return {
-                "transcript": command_text,
-                "response": (
-                    f"Mapping started for {current_map['map_name']}. "
-                    "Please slowly look around the room. Turn left and right so I can find doors, exits, and obstacles."
-                )
-            }
-        if any(word in command_text for word in no_words):
-            mapping_prompt_awaiting_answer = False
-            return {
-                "transcript": command_text,
-                "response": "Okay. I will not start mapping yet. Say start mapping when you are ready."
-            }
+    pending_prompt_response = _handle_pending_yes_no_prompt(command_text, snapshot)
+    if pending_prompt_response:
+        return pending_prompt_response
 
     if "start mapping" in command_text or "map this room" in command_text:
         mapping_prompt_awaiting_answer = False
@@ -1728,6 +1875,10 @@ def text_command(payload: dict):
     ]
 
     snapshot = get_live_spatial_snapshot()
+
+    pending_prompt_response = _handle_pending_yes_no_prompt(command_text, snapshot)
+    if pending_prompt_response:
+        return pending_prompt_response
 
     if "start mapping" in command_text or "map this room" in command_text:
         room_name = "Room"

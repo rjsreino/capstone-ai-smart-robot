@@ -1,0 +1,28 @@
+{
+  "version": "6.3.1",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "door_local",
+      "points": [
+        [
+          262.5432098765432,
+          5.901234567901236
+        ],
+        [
+          497.1111111111111,
+          368.2469135802469
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "WIN_20260604_23_42_14_Pro (3).jpg",
+  "imageData": null,
+  "imageHeight": 376,
+  "imageWidth": 672
+}
