@@ -50,6 +50,26 @@ const OBJECT_CLASSIFICATION_COLORS = {
   exit: "#22f59c",
 };
 
+const PROMPT_RESPONSE_TIMEOUT_MS = 10000;
+const MAP_SAVE_STABLE_OBS_MS = 300;
+const POSE_POLL_INTERVAL_MS = 100;
+
+const clampMapCoord = (value) => Math.max(0, Math.min(Number(value) || 0, 99));
+
+const normalizeDegrees = (value) => ((Number(value) % 360) + 360) % 360;
+
+const angleDelta = (fromDeg, toDeg) => (
+  (normalizeDegrees(toDeg) - normalizeDegrees(fromDeg) + 540) % 360
+) - 180;
+
+const getMapFacingLabel = (yaw) => {
+  const normalized = normalizeDegrees(yaw);
+  if (normalized >= 45 && normalized < 135) return "RIGHT";
+  if (normalized >= 135 && normalized < 225) return "UP";
+  if (normalized >= 225 && normalized < 315) return "LEFT";
+  return "DOWN";
+};
+
 const getObjectMobility = (object) => {
   const value = String(object?.mobility || object?.classification || "").toLowerCase();
   return value === "static" ? "static" : "dynamic";
@@ -63,8 +83,9 @@ const getObjectColor = (object) => {
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://172.16.112.18:8000");
+  const [serverUrl, setServerUrl] = useState("http://192.168.45.85:8000");
   const [data, setData] = useState(null);
+  const [livePoseData, setLivePoseData] = useState(null);
   const [command, setCommand] = useState("");
   const [recording, setRecording] = useState(null);
   const [lastTranscript, setLastTranscript] = useState("");
@@ -78,11 +99,15 @@ export default function App() {
   const [currentMap, setCurrentMap] = useState(null);
   const [mapActionStatus, setMapActionStatus] = useState("");
   const [pendingPrompt, setPendingPrompt] = useState(null);
+  const [roomSavePromptVisible, setRoomSavePromptVisible] = useState(false);
+  const [roomNameDraft, setRoomNameDraft] = useState("");
 
   const lastSpoken = useRef("");
   const lastSpeakTime = useRef(0);
   const lastCommandTime = useRef(0);
   const guidanceEnabledRef = useRef(true);
+  const pendingPromptRef = useRef(null);
+  const promptTimeoutRef = useRef(null);
 
   const speakText = async (text, options = {}) => {
     if (!text) return;
@@ -105,21 +130,73 @@ export default function App() {
     }
   };
 
+  const clearPromptTimeout = () => {
+    if (promptTimeoutRef.current) {
+      clearTimeout(promptTimeoutRef.current);
+      promptTimeoutRef.current = null;
+    }
+  };
+
+  const dismissPendingPrompt = () => {
+    clearPromptTimeout();
+    pendingPromptRef.current = null;
+    setPendingPrompt(null);
+  };
+
+  const expirePendingPrompt = async (promptId) => {
+    const activePrompt = pendingPromptRef.current;
+    if (!activePrompt || activePrompt.id !== promptId) return;
+
+    clearPromptTimeout();
+    pendingPromptRef.current = null;
+    setPendingPrompt(null);
+    lastSpoken.current = "";
+    lastSpeakTime.current = 0;
+
+    try {
+      await fetch(`${serverUrl}/answer-prompt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt_id: promptId, answer: "no" }),
+      });
+    } catch (error) {
+      console.log("Prompt timeout resolve error:", error);
+    }
+  };
+
   const updatePendingPrompt = (json) => {
     if (!json) return;
 
     if (json.requires_answer && json.answer_type === "yes_no") {
-      setPendingPrompt({
-        id: json.prompt_id || json.target || "prompt",
-        guidance: json.guidance || json.response || "Please confirm.",
-      });
+      const promptId = json.prompt_id || json.target || "prompt";
+      const guidance = json.guidance || json.response || "Please confirm.";
+      const existingPrompt = pendingPromptRef.current;
+
+      if (existingPrompt?.id === promptId && existingPrompt?.guidance === guidance) {
+        return;
+      }
+
+      clearPromptTimeout();
+      const prompt = {
+        id: promptId,
+        guidance,
+        expiresAt: Date.now() + PROMPT_RESPONSE_TIMEOUT_MS,
+      };
+      pendingPromptRef.current = prompt;
+      setPendingPrompt(prompt);
+      lastCommandTime.current = Date.now();
+      promptTimeoutRef.current = setTimeout(() => {
+        expirePendingPrompt(promptId);
+      }, PROMPT_RESPONSE_TIMEOUT_MS);
       return;
     }
 
     if (json.prompt_resolved) {
-      setPendingPrompt(null);
+      dismissPendingPrompt();
     }
   };
+
+  useEffect(() => () => clearPromptTimeout(), []);
 
   useEffect(() => {
   if (!serverUrl) return;
@@ -128,8 +205,10 @@ export default function App() {
     try {
       const response = await fetch(`${serverUrl}/autopilot-guidance`);
       const json = await response.json();
+      const isAnswerPrompt = json.requires_answer && json.answer_type === "yes_no";
 
       updatePendingPrompt(json);
+      if (pendingPromptRef.current && !isAnswerPrompt) return;
 
       if (!json.active || !json.guidance) return;
       if (json.guidance === lastSpoken.current) return;
@@ -296,11 +375,11 @@ export default function App() {
   };
 
   const getDirectionArrow = () => {
-    if (data?.guidance === "TURN LEFT") return "←";
-    if (data?.guidance === "TURN RIGHT") return "→";
-    if (data?.guidance === "GO FORWARD") return "↑";
+    if (data?.guidance === "TURN LEFT") return "L";
+    if (data?.guidance === "TURN RIGHT") return "R";
+    if (data?.guidance === "GO FORWARD") return "^";
     if (data?.guidance === "STOP! DANGER") return "!";
-    return "•";
+    return ".";
   };
 
   const getDistanceLabel = (value) => {
@@ -390,6 +469,7 @@ export default function App() {
 
   const speakGuidance = (json) => {
     if (!guidanceEnabledRef.current || !json) return;
+    if (pendingPromptRef.current) return;
     if (Date.now() - lastCommandTime.current < 5000) return;
 
     let message = "";
@@ -456,12 +536,22 @@ export default function App() {
 
   const runPromptAnswer = async (answerText) => {
     try {
+      const activePrompt = pendingPromptRef.current;
+      if (activePrompt?.expiresAt && Date.now() > activePrompt.expiresAt) {
+        await expirePendingPrompt(activePrompt.id);
+        return;
+      }
+      dismissPendingPrompt();
       setIsProcessing(true);
+      setMapActionStatus(`${answerText.toUpperCase()} selected...`);
 
-      const response = await fetch(`${serverUrl}/command`, {
+      const response = await fetch(`${serverUrl}/answer-prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: answerText }),
+        body: JSON.stringify({
+          prompt_id: activePrompt?.id,
+          answer: answerText,
+        }),
       });
 
       const json = await response.json();
@@ -527,7 +617,7 @@ export default function App() {
       setMapActionStatus(`${label}...`);
       const json = await postJson(path, body);
       const answer = path === "/save-map" && json.map_id
-        ? `Map saved as ${json.file_name || `${json.map_id}.json`} with ${json.landmark_count ?? 0} landmarks, ${json.static_object_count ?? 0} static objects, and ${json.grid_counts?.occupied ?? 0} obstacle cells.`
+        ? "Room saved."
         : json.message || json.status || json.response || "Done.";
       setMapActionStatus(answer);
       setLastResponse(answer);
@@ -543,6 +633,35 @@ export default function App() {
     }
   };
 
+  const askForRoomSaveName = async () => {
+    const message = "What would you like to name this room before I save it?";
+    const existingName = currentMap?.map_name && currentMap.map_name !== "Room"
+      ? currentMap.map_name
+      : "";
+    setRoomNameDraft(existingName);
+    setRoomSavePromptVisible(true);
+    setMapActionStatus(message);
+    setLastResponse(message);
+    lastCommandTime.current = Date.now();
+    await speakText(message, { interrupt: true });
+  };
+
+  const submitRoomSaveName = async () => {
+    const mapName = roomNameDraft.trim();
+    if (!mapName) {
+      const message = "Please enter a room name first.";
+      setMapActionStatus(message);
+      setLastResponse(message);
+      await speakText(message, { interrupt: true });
+      return;
+    }
+    setRoomSavePromptVisible(false);
+    await runMapAction("/save-map", {
+      map_name: mapName,
+      min_observed_ms: MAP_SAVE_STABLE_OBS_MS,
+    });
+  };
+
   useEffect(() => {
     const fetchStatus = async () => {
       try {
@@ -552,9 +671,6 @@ export default function App() {
         setData(json);
         setIsConnected(true);
         setLastUpdated(new Date().toLocaleTimeString());
-        if (!json?.spatial_memory?.active_prompt) {
-          setPendingPrompt(null);
-        }
         speakGuidance(json);
       } catch {
         setIsConnected(false);
@@ -562,8 +678,36 @@ export default function App() {
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 1000);
+    const interval = setInterval(fetchStatus, 300);
     return () => clearInterval(interval);
+  }, [serverUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let inFlight = false;
+
+    const fetchLivePose = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch(`${serverUrl}/pose`);
+        const json = await response.json();
+        if (isMounted) {
+          setLivePoseData(json);
+        }
+      } catch {
+        // Status polling still handles connection state; pose polling is only for fast facing.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    fetchLivePose();
+    const interval = setInterval(fetchLivePose, POSE_POLL_INTERVAL_MS);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
   }, [serverUrl]);
 
   useEffect(() => {
@@ -585,9 +729,56 @@ export default function App() {
     : currentMap?.static_grid || data?.map || [];
   const mapLandmarks = currentMap?.landmarks || [];
   const mapStaticObjects = currentMap?.static_objects || [];
-  const userGrid = data?.user_grid || { x: 50, z: 50 };
+  const userGrid = livePoseData?.user_grid || data?.user_grid || { x: 50, z: 50 };
   const mapPath = data?.path || [];
-  const mapSampleSize = 20;
+  const pose = livePoseData?.pose || data?.pose || {};
+  const userMapX = clampMapCoord(userGrid.x ?? 50);
+  const userMapZ = clampMapCoord(userGrid.z ?? 50);
+  const userYaw = normalizeDegrees(pose.raw_yaw ?? pose.yaw ?? 0);
+  const userFacingLabel = getMapFacingLabel(userYaw);
+  const poseX = ((Number(pose.x) || 0) / 1000).toFixed(2);
+  const poseY = ((Number(pose.y) || 0) / 1000).toFixed(2);
+  const poseZ = ((Number(pose.z) || 0) / 1000).toFixed(2);
+  const poseRoll = (Number(pose.roll) || 0).toFixed(1);
+  const posePitch = (Number(pose.pitch) || 0).toFixed(1);
+  const poseYaw = userYaw.toFixed(1);
+  const trackingState = livePoseData?.tracking_state || spatialMemory.tracking_state || pose.tracking_state || "UNKNOWN";
+  const performance = data?.performance || {};
+  const perfFps = (Number(performance.fps) || 0).toFixed(1);
+  const perfFrameMs = (Number(performance.frame_ms) || 0).toFixed(0);
+  const perfDepthMs = (Number(performance.depth_ms) || 0).toFixed(0);
+  const perfYoloMs = (Number(performance.yolo_ms) || 0).toFixed(0);
+  const userYawRad = (userYaw * Math.PI) / 180;
+  const headingTipX = clampMapCoord(userMapX + 2.2 * Math.sin(userYawRad));
+  const headingTipZ = clampMapCoord(userMapZ + 2.2 * Math.cos(userYawRad));
+  const headingBackX = userMapX - 1.1 * Math.sin(userYawRad);
+  const headingBackZ = userMapZ - 1.1 * Math.cos(userYawRad);
+  const headingSideX = 1.05 * Math.cos(userYawRad);
+  const headingSideZ = -1.05 * Math.sin(userYawRad);
+  const headingMarkerPoints = [
+    `${headingTipX},${headingTipZ}`,
+    `${clampMapCoord(headingBackX + headingSideX)},${clampMapCoord(headingBackZ + headingSideZ)}`,
+    `${clampMapCoord(headingBackX - headingSideX)},${clampMapCoord(headingBackZ - headingSideZ)}`,
+  ].join(" ");
+  const nextRoutePoint = Array.isArray(mapPath)
+    ? mapPath.find(([z, x]) => Math.hypot(Number(x) - userMapX, Number(z) - userMapZ) > 2)
+    : null;
+  const routeTargetX = nextRoutePoint ? clampMapCoord(nextRoutePoint[1]) : null;
+  const routeTargetZ = nextRoutePoint ? clampMapCoord(nextRoutePoint[0]) : null;
+  const hasRouteTarget = routeTargetX !== null && routeTargetZ !== null;
+  const routeBearing = hasRouteTarget
+    ? normalizeDegrees((Math.atan2(routeTargetX - userMapX, routeTargetZ - userMapZ) * 180) / Math.PI)
+    : null;
+  const routeDelta = hasRouteTarget ? angleDelta(userYaw, routeBearing) : 0;
+  const routeTurnLabel = !hasRouteTarget
+    ? "NO ROUTE"
+    : Math.abs(routeDelta) <= 20
+      ? "ON ROUTE"
+      : routeDelta > 0
+        ? "TURN RIGHT"
+        : "TURN LEFT";
+  const mapSampleSize = 50;
+  const mapCellSize = 100 / mapSampleSize;
   const mapCells = [];
 
   if (Array.isArray(mapGrid) && mapGrid.length) {
@@ -595,9 +786,25 @@ export default function App() {
     const colStep = Math.max(1, Math.floor((mapGrid[0]?.length || 100) / mapSampleSize));
     for (let row = 0; row < mapSampleSize; row += 1) {
       for (let col = 0; col < mapSampleSize; col += 1) {
-        const sourceRow = Math.min(row * rowStep, mapGrid.length - 1);
-        const sourceCol = Math.min(col * colStep, (mapGrid[sourceRow]?.length || 1) - 1);
-        const value = Number(mapGrid[sourceRow]?.[sourceCol] || 0);
+        const rowStart = row * rowStep;
+        const rowEnd = Math.min(rowStart + rowStep, mapGrid.length);
+        let hasWall = false;
+        let hasUnknown = false;
+        let hasSpecial = false;
+
+        for (let sourceRow = rowStart; sourceRow < rowEnd; sourceRow += 1) {
+          const rowData = mapGrid[sourceRow] || [];
+          const colStart = col * colStep;
+          const colEnd = Math.min(colStart + colStep, rowData.length || 100);
+          for (let sourceCol = colStart; sourceCol < colEnd; sourceCol += 1) {
+            const cellValue = Number(rowData[sourceCol] || 0);
+            if (cellValue === 1) hasWall = true;
+            else if (cellValue === 2) hasUnknown = true;
+            else if (cellValue > 0) hasSpecial = true;
+          }
+        }
+
+        const value = hasWall ? 1 : hasSpecial ? 3 : hasUnknown ? 2 : 0;
         mapCells.push({ row, col, value });
       }
     }
@@ -689,6 +896,27 @@ export default function App() {
           </View>
         </LinearGradient>
 
+        {pendingPrompt && (
+          <View style={styles.answerPromptCard}>
+            <Text style={styles.panelLabel}>CONFIRMATION NEEDED</Text>
+            <Text style={styles.answerPromptText}>{pendingPrompt.guidance}</Text>
+            <View style={styles.answerButtonRow}>
+              <Pressable
+                style={[styles.answerButton, styles.yesButton]}
+                onPress={() => runPromptAnswer("yes")}
+              >
+                <Text style={styles.answerButtonText}>YES</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.answerButton, styles.noButton]}
+                onPress={() => runPromptAnswer("no")}
+              >
+                <Text style={styles.answerButtonText}>NO</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
         <View style={styles.radarPanel}>
           <Text style={styles.panelLabel}>SPATIAL RADAR & PATH FINDING</Text>
 
@@ -745,22 +973,37 @@ export default function App() {
             </View>
           </View>
 
+          <View style={styles.poseHudStrip}>
+            <Text style={styles.poseHudText}>
+              POS X {poseX}m  Y {poseY}m  Z {poseZ}m
+            </Text>
+            <Text style={styles.poseHudText}>
+              ROT R {poseRoll}°  P {posePitch}°  Y {poseYaw}°  | {trackingState}
+            </Text>
+            <Text style={styles.performanceHudText}>
+              PERF FPS {perfFps}  FRAME {perfFrameMs}ms
+            </Text>
+            <Text style={styles.performanceHudText}>
+              DEPTH {perfDepthMs}ms  YOLO {perfYoloMs}ms
+            </Text>
+          </View>
+
           <View style={styles.nativeMapFrame}>
             <Svg width="100%" height="100%" viewBox="0 0 100 100">
               <Rect x="0" y="0" width="100" height="100" fill="#020617" />
               {mapCells.map((cell, index) => {
                 const fill =
-                  cell.value === 1 ? "#ef4444" :
-                  cell.value === 2 ? "#1e293b" :
+                  cell.value === 1 ? "#64748b" :
+                  cell.value === 2 ? "#111827" :
                   cell.value > 0 ? "#facc15" :
                   "#0f172a";
                 return (
                   <Rect
                     key={`cell-${index}`}
-                    x={cell.col * 5}
-                    y={cell.row * 5}
-                    width="4.6"
-                    height="4.6"
+                    x={cell.col * mapCellSize}
+                    y={cell.row * mapCellSize}
+                    width={mapCellSize * 0.92}
+                    height={mapCellSize * 0.92}
                     fill={fill}
                     opacity={cell.value === 0 ? 0.55 : 0.9}
                   />
@@ -815,29 +1058,57 @@ export default function App() {
                   />
                 );
               })}
-              <Circle
-                cx={Number(userGrid.x ?? 50)}
-                cy={Number(userGrid.z ?? 50)}
-                r="2.6"
+              {hasRouteTarget && (
+                <Line
+                  x1={userMapX}
+                  y1={userMapZ}
+                  x2={routeTargetX}
+                  y2={routeTargetZ}
+                  stroke="#22c55e"
+                  strokeWidth="0.7"
+                  strokeDasharray="2 1"
+                  strokeLinecap="round"
+                  opacity="0.9"
+                />
+              )}
+              <Polygon
+                points={headingMarkerPoints}
                 fill="#38bdf8"
                 stroke="#e0f2fe"
-                strokeWidth="0.8"
+                strokeWidth="0.35"
+                opacity="0.96"
               />
             </Svg>
           </View>
 
+          <View style={styles.mapHeadingRow}>
+            <Text style={styles.mapHeadingText}>Facing {userYaw.toFixed(0)}° {userFacingLabel}</Text>
+            <Text
+              style={[
+                styles.mapHeadingBadge,
+                routeTurnLabel === "ON ROUTE" && styles.onRouteBadge,
+                routeTurnLabel === "TURN LEFT" && styles.turnLeftBadge,
+                routeTurnLabel === "TURN RIGHT" && styles.turnRightBadge,
+              ]}
+            >
+              {routeTurnLabel}
+            </Text>
+          </View>
+
           <View style={styles.legendRow}>
-            <Text style={styles.legendText}>Blue: user</Text>
+            <Text style={styles.legendText}>Blue triangle: user facing</Text>
+            <Text style={styles.legendText}>Gray: wall/block</Text>
+            <Text style={styles.legendText}>Dark: unknown</Text>
             <Text style={styles.legendText}>Green/yellow: exit or door</Text>
             <Text style={styles.legendText}>Cyan: static object</Text>
             <Text style={styles.legendText}>Orange: dynamic object</Text>
           </View>
 
           <View style={styles.mapActions}>
-            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-mapping", { map_name: "Room" })}>
+            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-mapping", { map_name: "Room", awaiting_name: true })}>
               <Text style={styles.mapActionText}>START MAP</Text>
             </Pressable>
-            <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/save-map")}>
+            <Pressable style={styles.mapActionButton} onPress={askForRoomSaveName}>
               <Text style={styles.mapActionText}>SAVE</Text>
             </Pressable>
             <Pressable style={styles.mapActionButton} onPress={() => runMapAction("/start-navigation", { goal_type: "exit" })}>
@@ -852,10 +1123,45 @@ export default function App() {
             <Text style={styles.mapActionStatus}>{mapActionStatus}</Text>
           )}
 
+          {roomSavePromptVisible && (
+            <View style={styles.roomNamePromptCard}>
+              <Text style={styles.panelLabel}>ROOM NAME</Text>
+              <Text style={styles.answerPromptText}>Name this saved map.</Text>
+              <TextInput
+                style={styles.roomNameInput}
+                value={roomNameDraft}
+                onChangeText={setRoomNameDraft}
+                placeholder="bedroom1"
+                placeholderTextColor="#64748b"
+                autoCapitalize="none"
+                autoCorrect={false}
+                onSubmitEditing={submitRoomSaveName}
+                returnKeyType="done"
+              />
+              <View style={styles.answerButtonRow}>
+                <Pressable
+                  style={[styles.answerButton, styles.yesButton]}
+                  onPress={submitRoomSaveName}
+                >
+                  <Text style={styles.answerButtonText}>SAVE</Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.answerButton, styles.noButton]}
+                  onPress={() => setRoomSavePromptVisible(false)}
+                >
+                  <Text style={styles.answerButtonText}>CANCEL</Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+
           {savedMaps.slice(0, 3).map((item) => (
             <View key={item.map_id} style={styles.savedMapRow}>
               <View>
                 <Text style={styles.savedMapName}>{item.map_name}</Text>
+                <Text style={styles.savedMapMeta}>
+                  {item.file_name || `${item.map_id}.json`}
+                </Text>
                 <Text style={styles.savedMapMeta}>
                   {item.landmark_count} landmarks | {item.static_object_count ?? 0} static | {Number(item.coverage_percent || 0).toFixed(1)}% coverage
                 </Text>
@@ -903,27 +1209,6 @@ export default function App() {
           <LinearGradient colors={["#422006", "#1c1204"]} style={styles.processingBox}>
             <Text style={styles.processingText}>VICKY IS THINKING...</Text>
           </LinearGradient>
-        )}
-
-        {pendingPrompt && (
-          <View style={styles.answerPromptCard}>
-            <Text style={styles.panelLabel}>CONFIRMATION NEEDED</Text>
-            <Text style={styles.answerPromptText}>{pendingPrompt.guidance}</Text>
-            <View style={styles.answerButtonRow}>
-              <Pressable
-                style={[styles.answerButton, styles.yesButton]}
-                onPress={() => runPromptAnswer("yes")}
-              >
-                <Text style={styles.answerButtonText}>YES</Text>
-              </Pressable>
-              <Pressable
-                style={[styles.answerButton, styles.noButton]}
-                onPress={() => runPromptAnswer("no")}
-              >
-                <Text style={styles.answerButtonText}>NO</Text>
-              </Pressable>
-            </View>
-          </View>
         )}
 
         <View style={styles.switchPanel}>
@@ -1263,6 +1548,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#38bdf8",
   },
+  roomNamePromptCard: {
+    backgroundColor: "rgba(8,47,73,0.94)",
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#38bdf8",
+  },
   answerPromptText: {
     color: "#f8fafc",
     fontSize: 17,
@@ -1497,6 +1790,16 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#334155",
   },
+  roomNameInput: {
+    backgroundColor: "#1e293b",
+    borderRadius: 12,
+    padding: 12,
+    color: "#f8fafc",
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: "#334155",
+    marginBottom: 12,
+  },
   mapHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -1548,6 +1851,28 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginTop: 4,
   },
+  poseHudStrip: {
+    backgroundColor: "#0f172a",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    marginBottom: 12,
+    gap: 3,
+  },
+  poseHudText: {
+    color: "#93c5fd",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  performanceHudText: {
+    color: "#c4b5fd",
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
   nativeMapFrame: {
     height: 260,
     borderRadius: 18,
@@ -1555,6 +1880,40 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#334155",
     backgroundColor: "#020617",
+  },
+  mapHeadingRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 10,
+  },
+  mapHeadingText: {
+    color: "#bae6fd",
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  mapHeadingBadge: {
+    color: "#e2e8f0",
+    backgroundColor: "#334155",
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontSize: 11,
+    fontWeight: "900",
+    overflow: "hidden",
+  },
+  onRouteBadge: {
+    backgroundColor: "#166534",
+    color: "#dcfce7",
+  },
+  turnLeftBadge: {
+    backgroundColor: "#1d4ed8",
+    color: "#dbeafe",
+  },
+  turnRightBadge: {
+    backgroundColor: "#7c2d12",
+    color: "#ffedd5",
   },
   legendRow: {
     flexDirection: "row",

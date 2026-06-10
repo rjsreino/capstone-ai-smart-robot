@@ -66,5 +66,33 @@
   "room_1780641834": {
     "name": "Room",
     "exits": []
+  },
+  "bedroom1_260608_172519": {
+    "name": "bedroom1",
+    "exits": []
+  },
+  "auto_room_260608_182254": {
+    "name": "Auto Room",
+    "exits": []
+  },
+  "bedroom2_260608_195958": {
+    "name": "bedroom2",
+    "exits": []
+  },
+  "auto_room1_260609_162337": {
+    "name": "Auto Room1",
+    "exits": []
+  },
+  "auto_room_260609_185420": {
+    "name": "Auto Room..",
+    "exits": []
+  },
+  "auto_room_260609_190419": {
+    "name": "Auto Room",
+    "exits": []
+  },
+  "auto_room_260609_195334": {
+    "name": "Auto Room",
+    "exits": []
   }
 }

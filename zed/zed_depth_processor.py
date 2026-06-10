@@ -25,10 +25,16 @@ class ZedDepthConfig:
     # Depth range (in millimeters)
     min_depth: int = 300      # 30cm minimum
     max_depth: int = 10000    # 10m maximum (reduced for indoor navigation)
+    invalid_depth_as_far: bool = True  # Treat no-return / beyond-range depth as open space for navigation
     
     # Grid settings for navigation
     grid_width: int = 64      # Divide depth map into grid
     grid_height: int = 48
+    wall_hit_threshold: int = int(os.getenv("VICKY_WALL_HIT_THRESHOLD", "3"))
+    free_hit_threshold: int = int(os.getenv("VICKY_FREE_HIT_THRESHOLD", "2"))
+    wall_confidence_threshold: float = float(os.getenv("VICKY_WALL_CONFIDENCE_THRESHOLD", "0.58"))
+    wall_inflation_cells: int = int(os.getenv("VICKY_WALL_INFLATION_CELLS", "1"))
+    ray_clear_limit_m: float = float(os.getenv("VICKY_RAY_CLEAR_LIMIT_M", "4.5"))
 
 
 class ZedDepthProcessor:
@@ -66,7 +72,54 @@ class ZedDepthProcessor:
         self.positional_tracking_enabled = False
         self.is_tracking_ok = False
         self.tracking_state = "DISABLED"
-        self.occupancy_grid = np.zeros((100, 100), dtype=np.int8)
+        self.occupancy_grid = np.full((100, 100), 2, dtype=np.int8)
+        self.wall_hit_grid = np.zeros((100, 100), dtype=np.float32)
+        self.free_hit_grid = np.zeros((100, 100), dtype=np.float32)
+
+    def reset_occupancy_grid(self):
+        """Reset mapping confidence while preserving the tri-state occupancy convention."""
+        self.occupancy_grid.fill(2)
+        self.wall_hit_grid.fill(0)
+        self.free_hit_grid.fill(0)
+
+    def _mark_free_cell(self, grid_z: int, grid_x: int) -> None:
+        if not (0 <= grid_z < 100 and 0 <= grid_x < 100):
+            return
+        self.free_hit_grid[grid_z, grid_x] = min(self.free_hit_grid[grid_z, grid_x] + 1.0, 30.0)
+        self.wall_hit_grid[grid_z, grid_x] = max(self.wall_hit_grid[grid_z, grid_x] - 0.35, 0.0)
+
+    def _mark_wall_cell(self, grid_z: int, grid_x: int) -> None:
+        if not (0 <= grid_z < 100 and 0 <= grid_x < 100):
+            return
+        self.wall_hit_grid[grid_z, grid_x] = min(self.wall_hit_grid[grid_z, grid_x] + 1.0, 30.0)
+        self.free_hit_grid[grid_z, grid_x] = max(self.free_hit_grid[grid_z, grid_x] - 0.15, 0.0)
+
+    def _refresh_occupancy_from_confidence(self) -> None:
+        total = self.wall_hit_grid + self.free_hit_grid
+        wall_confidence = np.divide(
+            self.wall_hit_grid,
+            np.maximum(total, 1.0),
+            out=np.zeros_like(self.wall_hit_grid),
+            where=total > 0,
+        )
+        occupied = (
+            (self.wall_hit_grid >= self.config.wall_hit_threshold)
+            & (wall_confidence >= self.config.wall_confidence_threshold)
+        )
+        free = (self.free_hit_grid >= self.config.free_hit_threshold) & ~occupied
+
+        grid = np.full((100, 100), 2, dtype=np.int8)
+        grid[free] = 0
+        grid[occupied] = 1
+
+        inflation = max(0, int(self.config.wall_inflation_cells))
+        if inflation > 0 and np.any(occupied):
+            kernel_size = inflation * 2 + 1
+            kernel = np.ones((kernel_size, kernel_size), dtype=np.uint8)
+            inflated = cv2.dilate(occupied.astype(np.uint8), kernel, iterations=1) > 0
+            grid[inflated] = 1
+
+        self.occupancy_grid = grid
         
     def start(self):
         """Start the ZED camera connection"""
@@ -298,8 +351,8 @@ class ZedDepthProcessor:
         if depth_frame is None:
             return None
             
-        # Clip depth to configured range
-        depth_clipped = np.clip(depth_frame, self.config.min_depth, self.config.max_depth)
+        # Prepare navigation depth without turning invalid zeros into near obstacles.
+        depth_clipped = self.prepare_navigation_depth(depth_frame)
         
         # Create grid-based depth map
         grid_depth = self.create_depth_grid(depth_clipped)
@@ -328,6 +381,29 @@ class ZedDepthProcessor:
             'timestamp': time.time()
         }
 
+    def prepare_navigation_depth(self, depth_frame: np.ndarray) -> np.ndarray:
+        """Sanitize raw ZED depth for navigation.
+
+        ZED returns 0/NaN/Inf when stereo cannot estimate depth, often in long
+        hallways or empty rooms. For navigation, those pixels should behave as
+        far/open space instead of being clipped up to min_depth as a fake close
+        obstacle.
+        """
+        depth_nav = np.array(depth_frame, dtype=np.float32, copy=True)
+        valid = np.isfinite(depth_nav) & (depth_nav > 0)
+
+        if self.config.invalid_depth_as_far:
+            depth_nav[~valid] = float(self.config.max_depth)
+        else:
+            depth_nav[~valid] = 0.0
+
+        valid = depth_nav > 0
+        too_near = valid & (depth_nav < self.config.min_depth)
+        too_far = valid & (depth_nav > self.config.max_depth)
+        depth_nav[too_near] = float(self.config.min_depth)
+        depth_nav[too_far] = float(self.config.max_depth)
+        return depth_nav
+
     def _accumulate_grid(self, grid_depth: np.ndarray) -> None:
         """Projects depth points to gravity-aligned World coordinates, filters out floor/ceiling, and runs ray-clearing."""
         tx_m = self.tx / 1000.0
@@ -345,7 +421,7 @@ class ZedDepthProcessor:
         h, w = grid_depth.shape
         
         # Ray clearing range (m)
-        d_clear_limit = 4.0
+        d_clear_limit = float(self.config.ray_clear_limit_m)
 
         for col in range(w):
             col_angle = -hfov / 2.0 + col * (hfov / (w - 1))
@@ -357,6 +433,8 @@ class ZedDepthProcessor:
                 row_angle = vfov / 2.0 - row * (vfov / (h - 1))
                 d_mm = grid_depth[row, col]
                 if d_mm < self.config.min_depth or d_mm > self.config.max_depth:
+                    continue
+                if self.config.invalid_depth_as_far and d_mm >= self.config.max_depth * 0.98:
                     continue
                     
                 d_m = d_mm / 1000.0
@@ -391,10 +469,10 @@ class ZedDepthProcessor:
                     xs = np.linspace(user_grid_x, grid_x, steps + 1)[:-1]
                     zs = np.linspace(user_grid_z, grid_z, steps + 1)[:-1]
                     for px, pz in zip(xs, zs):
-                        self.occupancy_grid[int(pz), int(px)] = 0
+                        self._mark_free_cell(int(pz), int(px))
                 
                 # Mark obstacle cell
-                self.occupancy_grid[grid_z, grid_x] = 1
+                self._mark_wall_cell(grid_z, grid_x)
             else:
                 # No obstacle in this direction: clear path up to clearing limit (invert sign to fix mirroring)
                 x_c = -d_clear_limit * np.sin(col_angle)
@@ -410,7 +488,9 @@ class ZedDepthProcessor:
                     xs = np.linspace(user_grid_x, grid_x, steps + 1)
                     zs = np.linspace(user_grid_z, grid_z, steps + 1)
                     for px, pz in zip(xs, zs):
-                        self.occupancy_grid[int(pz), int(px)] = 0
+                        self._mark_free_cell(int(pz), int(px))
+
+        self._refresh_occupancy_from_confidence()
         
     def create_depth_grid(self, depth_frame: np.ndarray) -> np.ndarray:
         """Divide depth frame into grid and compute average depth per cell"""
@@ -514,12 +594,18 @@ class ZedDepthProcessor:
         def get_zone_stats(zone):
             valid = zone[zone > 0]
             if len(valid) == 0:
-                return {'min': self.config.max_depth, 'mean': self.config.max_depth, 
-                       'median': self.config.max_depth}
+                return {
+                    'min': self.config.max_depth,
+                    'mean': self.config.max_depth,
+                    'median': self.config.max_depth,
+                    'open_space_ratio': 1.0,
+                }
+            open_space_ratio = float(np.mean(valid >= self.config.max_depth * 0.95))
             return {
                 'min': float(np.min(valid)),
                 'mean': float(np.mean(valid)),
-                'median': float(np.median(valid))
+                'median': float(np.median(valid)),
+                'open_space_ratio': open_space_ratio,
             }
             
         return {

@@ -62,7 +62,7 @@ from llm_reasoner import ask_llm
 # CONSTANTS & CONFIGURATION
 # ==========================================
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COCO_MODEL_PATH = "yolov8n.pt"
+COCO_MODEL_PATH = os.getenv("VICKY_COCO_MODEL", "yolov8m.pt")
 DEFAULT_LANDMARK_MODEL_PATHS = (
     "runs/detect/exit_sign_only/weights/best.pt;"
     "runs/detect/exit_sign_only_v2/weights/best.pt;"
@@ -73,13 +73,43 @@ LANDMARK_MODEL_PATHS = [
     for path in os.getenv("VICKY_YOLO_MODEL", DEFAULT_LANDMARK_MODEL_PATHS).replace(",", ";").split(";")
     if path.strip()
 ]
-COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.20"))
+COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.35"))
 COCO_IMAGE_SIZE = int(os.getenv("VICKY_COCO_IMGSZ", "320"))
-LANDMARK_CONFIDENCE = float(os.getenv("VICKY_LANDMARK_CONF", "0.10"))
+LANDMARK_CONFIDENCE = float(os.getenv("VICKY_LANDMARK_CONF", "0.30"))
 LANDMARK_IMAGE_SIZE = int(os.getenv("VICKY_LANDMARK_IMGSZ", "640"))
 CUSTOM_SUPPRESS_IOU = float(os.getenv("VICKY_CUSTOM_SUPPRESS_IOU", "0.40"))
-EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.45"))
+PERSON_CONFIDENCE = float(os.getenv("VICKY_PERSON_CONF", "0.35"))
+STATIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_STATIC_OBJECT_CONF", "0.40"))
+DYNAMIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_DYNAMIC_OBJECT_CONF", "0.35"))
+SMALL_OBJECT_CONFIDENCE = float(os.getenv("VICKY_SMALL_OBJECT_CONF", "0.45"))
+DOOR_CONFIDENCE = float(os.getenv("VICKY_DOOR_CONF", "0.35"))
+DOOR_MIN_ASPECT_RATIO = float(os.getenv("VICKY_DOOR_MIN_ASPECT", "1.20"))
+DOOR_MIN_HEIGHT_RATIO = float(os.getenv("VICKY_DOOR_MIN_HEIGHT_RATIO", "0.18"))
+DOOR_REQUIRE_PASSAGE_DEPTH = os.getenv("VICKY_DOOR_REQUIRE_PASSAGE_DEPTH", "1").strip().lower() in {"1", "true", "yes"}
+DOOR_PASSAGE_MIN_DEPTH_M = float(os.getenv("VICKY_DOOR_PASSAGE_MIN_DEPTH_M", "1.20"))
+DOOR_PASSAGE_DEPTH_DELTA_M = float(os.getenv("VICKY_DOOR_PASSAGE_DEPTH_DELTA_M", "0.35"))
+DOOR_DEPTH_MIN_VALID_RATIO = float(os.getenv("VICKY_DOOR_DEPTH_MIN_VALID_RATIO", "0.15"))
+EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.55"))
 EXIT_SIGN_MAX_AREA_RATIO = float(os.getenv("VICKY_EXIT_SIGN_MAX_AREA", "0.12"))
+COCO_FRAME_STRIDE = max(1, int(os.getenv("VICKY_COCO_EVERY_N", "2")))
+LANDMARK_FRAME_STRIDE = max(1, int(os.getenv("VICKY_LANDMARK_EVERY_N", "3")))
+YOLO_MAX_DETECTIONS = max(1, int(os.getenv("VICKY_YOLO_MAX_DET", "8")))
+ENABLE_TELEMETRY_STREAM = os.getenv("VICKY_ENABLE_TELEMETRY", "0").strip().lower() in {"1", "true", "yes"}
+ZED_DEPTH_MODE = os.getenv("VICKY_ZED_DEPTH_MODE", "PERFORMANCE")
+ZED_MIN_DEPTH_MM = int(os.getenv("VICKY_ZED_MIN_DEPTH_MM", "400"))
+ZED_MAX_DEPTH_MM = int(os.getenv("VICKY_ZED_MAX_DEPTH_MM", "10000"))
+ZED_INVALID_DEPTH_AS_FAR = os.getenv("VICKY_ZED_INVALID_DEPTH_AS_FAR", "1").strip().lower() in {"1", "true", "yes"}
+OPEN_SPACE_DEPTH_MM = int(os.getenv("VICKY_OPEN_SPACE_DEPTH_MM", "4000"))
+OPEN_SPACE_RATIO = float(os.getenv("VICKY_OPEN_SPACE_RATIO", "0.35"))
+LIVE_DETECTION_MIN_OBS_MS = int(os.getenv("VICKY_LIVE_DET_MIN_OBS_MS", "300"))
+LIVE_DETECTION_MAX_MISS_MS = int(os.getenv("VICKY_LIVE_DET_MAX_MISS_MS", "900"))
+DYNAMIC_DETECTION_MAX_MISS_MS = int(os.getenv("VICKY_DYNAMIC_DET_MAX_MISS_MS", "250"))
+LIVE_DETECTION_MATCH_IOU = float(os.getenv("VICKY_LIVE_DET_MATCH_IOU", "0.25"))
+POSE_SMOOTHING_ALPHA = float(os.getenv("VICKY_POSE_SMOOTHING_ALPHA", "0.35"))
+POSE_YAW_SMOOTHING_ALPHA = float(os.getenv("VICKY_POSE_YAW_SMOOTHING_ALPHA", "0.85"))
+TRACKING_WARNING_INTERVAL_S = float(os.getenv("VICKY_TRACKING_WARNING_INTERVAL_S", "5.0"))
+DYNAMIC_GRID_CLEAR_RADIUS_CELLS = int(os.getenv("VICKY_DYNAMIC_GRID_CLEAR_RADIUS_CELLS", "3"))
+DYNAMIC_GRID_CLEAR_TTL_S = float(os.getenv("VICKY_DYNAMIC_GRID_CLEAR_TTL_S", "4.0"))
 MIC_INDEX = -1             # -1 for auto-detect microphone index
 SD_WAKE_DEVICE_INDEX = -1    # -1 for default sounddevice device index
 WAKEWORD_NAME = "jarvis"
@@ -134,6 +164,11 @@ DYNAMIC_OBJECT_CLASSES = {
     "mouse", "remote",
 }
 
+SMALL_OBJECT_CLASSES = {
+    "bottle", "cup", "cell phone", "laptop", "book",
+    "keyboard", "mouse", "remote",
+}
+
 OBJECT_CLASSIFICATION_COLORS = {
     "static": "#38bdf8",
     "dynamic": "#f97316",
@@ -154,14 +189,26 @@ STATIC_NAVIGATION_LABELS = {
     "exit_sign": "exit sign",
 }
 
+DOOR_LANDMARK_LABELS = {"door", "doorway"}
+OPEN_DOOR_LABELS = {"open door", "open_door", "doorway"}
+CLOSED_DOOR_LABELS = {"closed door", "closed_door"}
+AMBIGUOUS_DOOR_LABELS = {"door", "door local", "door_local"}
+
 
 def normalize_detection_label(label: str) -> str:
     return str(label or "").strip().lower().replace("_", " ").replace("-", " ")
 
 
+def semantic_label_for_detection(label: str, door_passable: bool | None = None) -> str:
+    normalized = normalize_detection_label(label)
+    if normalized in AMBIGUOUS_DOOR_LABELS and door_passable is not None:
+        return "doorway" if door_passable else "door"
+    return STATIC_NAVIGATION_LABELS.get(normalized, normalized)
+
+
 def classify_object_mobility(label: str) -> str:
     normalized = normalize_detection_label(label)
-    semantic_label = STATIC_NAVIGATION_LABELS.get(normalized, normalized)
+    semantic_label = semantic_label_for_detection(normalized)
     if normalized in STATIC_OBJECT_CLASSES or semantic_label in STATIC_OBJECT_CLASSES:
         return "static"
     if normalized in DYNAMIC_OBJECT_CLASSES or semantic_label in DYNAMIC_OBJECT_CLASSES:
@@ -171,7 +218,7 @@ def classify_object_mobility(label: str) -> str:
 
 def object_color_for_label(label: str, mobility: str | None = None) -> str:
     normalized = normalize_detection_label(label)
-    semantic_label = STATIC_NAVIGATION_LABELS.get(normalized, normalized)
+    semantic_label = semantic_label_for_detection(normalized)
     if "exit" in semantic_label:
         return OBJECT_CLASSIFICATION_COLORS["exit"]
     if "door" in semantic_label:
@@ -229,9 +276,251 @@ def box_iou(box_a: tuple[int, int, int, int], box_b: tuple[int, int, int, int]) 
     return inter_area / union_area if union_area > 0 else 0.0
 
 
+def class_confidence_threshold(class_name: str, is_landmark_model: bool) -> float:
+    normalized = normalize_detection_label(class_name)
+    semantic_label = semantic_label_for_detection(normalized)
+
+    if semantic_label == "exit sign":
+        return EXIT_SIGN_CONFIDENCE
+    if semantic_label in DOOR_LANDMARK_LABELS:
+        return DOOR_CONFIDENCE
+    if normalized == "person":
+        return PERSON_CONFIDENCE
+    if normalized in SMALL_OBJECT_CLASSES:
+        return SMALL_OBJECT_CONFIDENCE
+    if normalized in STATIC_OBJECT_CLASSES or semantic_label in STATIC_OBJECT_CLASSES:
+        return STATIC_OBJECT_CONFIDENCE
+    if normalized in DYNAMIC_OBJECT_CLASSES or semantic_label in DYNAMIC_OBJECT_CLASSES:
+        return DYNAMIC_OBJECT_CONFIDENCE
+    return LANDMARK_CONFIDENCE if is_landmark_model else COCO_CONFIDENCE
+
+
+def detection_track_label(detection: dict) -> str:
+    label = detection.get("semantic_label") or detection.get("class_name") or "object"
+    normalized = normalize_detection_label(label)
+    return semantic_label_for_detection(normalized)
+
+
+def detection_is_dynamic(detection: dict) -> bool:
+    mobility = detection.get("mobility") or detection.get("classification")
+    if mobility:
+        return str(mobility).lower() == "dynamic"
+    return classify_object_mobility(detection_track_label(detection)) == "dynamic"
+
+
+def _matching_track_key(detection: dict, tracks: dict) -> str | None:
+    label = detection_track_label(detection)
+    source_model = detection.get("source_model")
+    box = tuple(detection.get("box", (0, 0, 0, 0)))
+    best_key = None
+    best_iou = 0.0
+
+    for key, track in tracks.items():
+        if track.get("label") != label:
+            continue
+        if track.get("source_model") != source_model:
+            continue
+        iou = box_iou(box, tuple(track.get("box", (0, 0, 0, 0))))
+        if iou >= LIVE_DETECTION_MATCH_IOU and iou > best_iou:
+            best_key = key
+            best_iou = iou
+
+    return best_key
+
+
+def update_stable_detections(detections: list[dict], tracks: dict, now: float) -> list[dict]:
+    stable_detections = []
+
+    for detection in detections:
+        is_fresh = bool(detection.get("fresh", True))
+        is_dynamic = detection_is_dynamic(detection)
+        key = _matching_track_key(detection, tracks)
+
+        if key is None:
+            if not is_fresh:
+                continue
+            key = f"{detection.get('source_model', 'model')}:{detection_track_label(detection)}:{len(tracks) + 1}:{now:.3f}"
+            tracks[key] = {
+                "label": detection_track_label(detection),
+                "source_model": detection.get("source_model"),
+                "first_seen": now,
+                "last_seen": now,
+                "fresh_seen_count": 0,
+                "box": tuple(detection.get("box", (0, 0, 0, 0))),
+                "mobility": "dynamic" if is_dynamic else "static",
+                "stable": False,
+            }
+
+        track = tracks[key]
+        if is_fresh:
+            track["last_seen"] = now
+            track["fresh_seen_count"] = int(track.get("fresh_seen_count", 0)) + 1
+            track["box"] = tuple(detection.get("box", track.get("box", (0, 0, 0, 0))))
+        elif is_dynamic and now - float(track.get("last_seen", now)) > (DYNAMIC_DETECTION_MAX_MISS_MS / 1000.0):
+            continue
+        elif not is_dynamic and not track.get("stable"):
+            continue
+
+        observed_ms = max(0.0, (float(track.get("last_seen", now)) - float(track.get("first_seen", now))) * 1000.0)
+        if is_dynamic:
+            track["stable"] = True
+        else:
+            track["stable"] = bool(
+                track.get("stable")
+                or (
+                    track.get("fresh_seen_count", 0) >= 2
+                    and observed_ms >= LIVE_DETECTION_MIN_OBS_MS
+                )
+            )
+
+        if track["stable"]:
+            stable_detection = detection.copy()
+            stable_detection["observed_ms"] = observed_ms
+            stable_detection["stable_seen_count"] = int(track.get("fresh_seen_count", 0))
+            stable_detections.append(stable_detection)
+
+    stale_keys = [
+        key for key, track in tracks.items()
+        if now - float(track.get("last_seen", now)) > (
+            (DYNAMIC_DETECTION_MAX_MISS_MS if track.get("mobility") == "dynamic" else LIVE_DETECTION_MAX_MISS_MS) / 1000.0
+        )
+    ]
+    for key in stale_keys:
+        tracks.pop(key, None)
+
+    return stable_detections
+
+
+def filter_semantic_objects_by_stable_detections(objects: list[dict], stable_detections: list[dict]) -> list[dict]:
+    stable_refs = []
+    for detection in stable_detections:
+        if "box" not in detection:
+            continue
+        stable_refs.append({
+            "label": detection_track_label(detection),
+            "source_model": detection.get("source_model"),
+            "box": tuple(detection["box"]),
+            "observed_ms": detection.get("observed_ms", 0.0),
+        })
+
+    filtered = []
+    for obj in objects:
+        if "box" not in obj:
+            filtered.append(obj)
+            continue
+
+        obj_label = normalize_detection_label(obj.get("label") or obj.get("detected_label") or "object")
+        obj_label = STATIC_NAVIGATION_LABELS.get(obj_label, obj_label)
+        obj_source = obj.get("source_model")
+        obj_box = tuple(obj["box"])
+        for ref in stable_refs:
+            if ref["label"] != obj_label:
+                continue
+            if ref["source_model"] != obj_source:
+                continue
+            if box_iou(obj_box, ref["box"]) >= LIVE_DETECTION_MATCH_IOU:
+                obj_copy = obj.copy()
+                obj_copy["observed_ms"] = ref["observed_ms"]
+                filtered.append(obj_copy)
+                break
+
+    return filtered
+
+
+def _angle_delta_deg(current: float, previous: float) -> float:
+    return (current - previous + 180.0) % 360.0 - 180.0
+
+
+def smooth_pose_sample(previous: dict | None, current: dict, alpha: float, yaw_alpha: float | None = None) -> dict:
+    if previous is None:
+        return current.copy()
+
+    alpha = max(0.0, min(float(alpha), 1.0))
+    yaw_alpha = alpha if yaw_alpha is None else max(0.0, min(float(yaw_alpha), 1.0))
+    smoothed = current.copy()
+    for key in ("x", "y", "z", "roll", "pitch"):
+        smoothed[key] = float(previous.get(key, current.get(key, 0.0))) * (1.0 - alpha) + float(current.get(key, 0.0)) * alpha
+
+    previous_yaw = float(previous.get("yaw", current.get("yaw", 0.0)))
+    current_yaw = float(current.get("yaw", previous_yaw))
+    smoothed["yaw"] = (previous_yaw + _angle_delta_deg(current_yaw, previous_yaw) * yaw_alpha + 180.0) % 360.0 - 180.0
+    return smoothed
+
+
 def is_priority_landmark(class_name: str) -> bool:
-    semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+    normalized = normalize_detection_label(class_name)
+    semantic_label = semantic_label_for_detection(normalized)
     return semantic_label in {"door", "doorway", "exit sign"}
+
+
+def is_door_landmark(class_name: str) -> bool:
+    normalized = normalize_detection_label(class_name)
+    semantic_label = semantic_label_for_detection(normalized)
+    return semantic_label in DOOR_LANDMARK_LABELS
+
+
+def looks_like_door_panel(box: tuple[int, int, int, int], frame_shape: tuple[int, int]) -> bool:
+    h, w = frame_shape
+    x1, y1, x2, y2 = box
+    x1, x2 = max(0, x1), min(w, x2)
+    y1, y2 = max(0, y1), min(h, y2)
+    box_w = max(0, x2 - x1)
+    box_h = max(0, y2 - y1)
+    if box_w <= 0 or box_h <= 0:
+        return False
+
+    aspect_ratio = box_h / max(box_w, 1)
+    height_ratio = box_h / max(h, 1)
+    return aspect_ratio >= DOOR_MIN_ASPECT_RATIO and height_ratio >= DOOR_MIN_HEIGHT_RATIO
+
+
+def _valid_depth_values(depth_roi):
+    if depth_roi is None or depth_roi.size == 0:
+        return np.array([], dtype=np.float32)
+    values = depth_roi.astype(np.float32).reshape(-1)
+    values = values[np.isfinite(values)]
+    values = values[(values > 200.0) & (values < 8000.0)]
+    return values / 1000.0
+
+
+def looks_like_passable_door(depth_frame, box: tuple[int, int, int, int], frame_shape: tuple[int, int]) -> bool:
+    h, w = frame_shape
+    x1, y1, x2, y2 = box
+    x1, x2 = max(0, x1), min(w, x2)
+    y1, y2 = max(0, y1), min(h, y2)
+    box_w = max(0, x2 - x1)
+    box_h = max(0, y2 - y1)
+    if box_w <= 0 or box_h <= 0:
+        return False
+
+    if not looks_like_door_panel((x1, y1, x2, y2), frame_shape):
+        return False
+    if not DOOR_REQUIRE_PASSAGE_DEPTH:
+        return True
+
+    mid_y1 = y1 + int(box_h * 0.25)
+    mid_y2 = y1 + int(box_h * 0.90)
+    center_x1 = x1 + int(box_w * 0.28)
+    center_x2 = x1 + int(box_w * 0.72)
+    side_w = max(2, int(box_w * 0.18))
+
+    center_depths = _valid_depth_values(depth_frame[mid_y1:mid_y2, center_x1:center_x2])
+    if center_depths.size < max(8, int((mid_y2 - mid_y1) * max(1, center_x2 - center_x1) * DOOR_DEPTH_MIN_VALID_RATIO)):
+        return False
+
+    center_median = float(np.median(center_depths))
+    left_depths = _valid_depth_values(depth_frame[mid_y1:mid_y2, x1:x1 + side_w])
+    right_depths = _valid_depth_values(depth_frame[mid_y1:mid_y2, x2 - side_w:x2])
+    side_depths = np.concatenate([left_depths, right_depths]) if left_depths.size or right_depths.size else np.array([], dtype=np.float32)
+
+    if side_depths.size == 0:
+        return center_median >= DOOR_PASSAGE_MIN_DEPTH_M
+
+    side_median = float(np.median(side_depths))
+    return (
+        center_median >= DOOR_PASSAGE_MIN_DEPTH_M
+        and center_median - side_median >= DOOR_PASSAGE_DEPTH_DELTA_M
+    )
 
 
 def resolve_model_path(model_path: str) -> str:
@@ -297,6 +586,13 @@ occupancy_grid = np.zeros((100, 100), dtype=np.int8).tolist()
 reset_map_flag = False
 semantic_objects = []
 active_semantic_path = False
+performance_data = {
+    "fps": 0.0,
+    "frame_ms": 0.0,
+    "depth_ms": 0.0,
+    "yolo_ms": 0.0,
+    "model": COCO_MODEL_PATH,
+}
 
 def trigger_map_reset():
     global reset_map_flag
@@ -430,6 +726,8 @@ async def telemetry_sender_loop():
                     "left_clearance_mm": float(data["zones"].get("left", 5000.0)),
                     "center_clearance_mm": float(data["zones"].get("center", 5000.0)),
                     "right_clearance_mm": float(data["zones"].get("right", 5000.0)),
+                    "center_open_space_ratio": float(data["zones"].get("center_open_space_ratio", 0.0)),
+                    "scene_hint": data["zones"].get("scene_hint", "unknown"),
                     "escape_vector": guidance_cmd
                 }
 
@@ -737,15 +1035,16 @@ def extract_text_from_frame(frame) -> str:
 def vision_loop():
     global latest_detections, latest_frame, latest_depth_map, running
     global guidance_cmd, guidance_color, zones_data, safe_distance_threshold
-    global pose_data, occupancy_grid, reset_map_flag, semantic_objects, active_semantic_path
+    global pose_data, occupancy_grid, reset_map_flag, semantic_objects, active_semantic_path, performance_data
 
     # Configure ZED 1 Camera for USB 2.0 fallback connection (VGA @ 15fps)
     config = ZedDepthConfig(
         resolution="vga",
         fps=15,
-        depth_mode="PERFORMANCE", # Reliable fallback bypasses neural/TRT hangs
-        min_depth=400,
-        max_depth=5000
+        depth_mode=ZED_DEPTH_MODE, # Reliable fallback bypasses neural/TRT hangs
+        min_depth=ZED_MIN_DEPTH_MM,
+        max_depth=ZED_MAX_DEPTH_MM,
+        invalid_depth_as_far=ZED_INVALID_DEPTH_AS_FAR,
     )
     
     processor = ZedDepthProcessor(config)
@@ -770,14 +1069,27 @@ def vision_loop():
         detection_models.append((f"landmark_{index}", landmark_model))
 
     print(f"[YOLO] Running on device: {device}")
+    print(
+        "[YOLO] Performance mode: "
+        f"COCO every {COCO_FRAME_STRIDE} frame(s) @ {COCO_IMAGE_SIZE}px, "
+        f"landmarks every {LANDMARK_FRAME_STRIDE} frame(s) @ {LANDMARK_IMAGE_SIZE}px, "
+        f"max_det={YOLO_MAX_DETECTIONS}, display={'on' if os.getenv('VICKY_ENABLE_DISPLAY', '1').strip().lower() in {'1', 'true', 'yes'} else 'off'}"
+    )
 
     prev_time = time.time()
     last_auto_announce_time = 0.0
     last_exit_check_time = 0.0
     last_exit_announce_time = 0.0
     persistent_exit_signs = {}
+    frame_index = 0
+    cached_model_detections = {}
+    cached_model_semantic_objects = {}
+    detection_tracks = {}
+    dynamic_grid_clear_cells = {}
+    smoothed_pose = None
+    last_tracking_warning_time = time.time()
 
-    display_enabled = os.getenv("VICKY_ENABLE_DISPLAY", "1").strip().lower() not in {"0", "false", "no"}
+    display_enabled = os.getenv("VICKY_ENABLE_DISPLAY", "1").strip().lower() in {"1", "true", "yes"}
     if display_enabled:
         try:
             cv2.namedWindow("ZED Spatial Live Vision Assistant")
@@ -789,7 +1101,7 @@ def vision_loop():
         # Check if map reset is requested
         if reset_map_flag:
             with frame_lock:
-                processor.occupancy_grid.fill(0)
+                processor.reset_occupancy_grid()
                 occupancy_grid = processor.occupancy_grid.tolist()
                 reset_map_flag = False
             print("[VISION] Persistent occupancy grid reset completed in processor.")
@@ -806,19 +1118,63 @@ def vision_loop():
         if rgb_frame is None or depth_frame is None:
             continue
 
+        frame_index += 1
+        depth_ms = 0.0
+        yolo_ms = 0.0
+
+        raw_pose_sample = {
+            "x": float(processor.tx),
+            "y": float(processor.ty),
+            "z": float(processor.tz),
+            "roll": float(processor.roll),
+            "pitch": float(processor.pitch),
+            "yaw": float(processor.yaw),
+        }
+        if processor.is_tracking_ok or smoothed_pose is None:
+            smoothed_pose = smooth_pose_sample(
+                smoothed_pose,
+                raw_pose_sample,
+                POSE_SMOOTHING_ALPHA,
+                POSE_YAW_SMOOTHING_ALPHA,
+            )
+        pose_for_frame = smoothed_pose.copy() if smoothed_pose is not None else raw_pose_sample
+
+        tracking_now = time.time()
+        if (
+            processor.positional_tracking_enabled
+            and not processor.is_tracking_ok
+            and tracking_now - last_tracking_warning_time >= TRACKING_WARNING_INTERVAL_S
+        ):
+            enqueue_speech("Visual tracking is unstable. Please slow down and scan the room.")
+            last_tracking_warning_time = tracking_now
+
         # 1. Navigation spatial zones analysis
+        depth_start_time = time.time()
         nav_data = processor.process_depth_for_navigation(depth_frame)
+        depth_ms = (time.time() - depth_start_time) * 1000.0
         if nav_data is not None:
             zones = nav_data['zones']
             left_dist = zones['left']['median']
             center_dist = zones['center']['median']
             right_dist = zones['right']['median']
+            center_open_ratio = float(zones['center'].get('open_space_ratio', 0.0))
+            full_open_ratio = float(zones['full'].get('open_space_ratio', 0.0))
+            scene_hint = (
+                "hallway_or_empty_room"
+                if center_dist >= OPEN_SPACE_DEPTH_MM and center_open_ratio >= OPEN_SPACE_RATIO
+                else "open_space"
+                if center_dist >= OPEN_SPACE_DEPTH_MM
+                else "near_obstacle"
+            )
             
             if not telemetry_source_active:
                 zones_data = {
                     'left': left_dist,
                     'center': center_dist,
-                    'right': right_dist
+                    'right': right_dist,
+                    'center_open_space_ratio': center_open_ratio,
+                    'full_open_space_ratio': full_open_ratio,
+                    'scene_hint': scene_hint,
                 }
 
                 # Safety Threshold Calculation
@@ -838,32 +1194,54 @@ def vision_loop():
                         guidance_color = (255, 128, 0)
 
         # 2. YOLO Object Detection
-        annotated = rgb_frame.copy()
-        
         h, w, _ = rgb_frame.shape
         frame_area = max(w * h, 1)
+        render_detections = display_enabled or ENABLE_TELEMETRY_STREAM
+        annotated = rgb_frame.copy() if render_detections else rgb_frame
         detections = []
         temp_semantic_objects = []
 
-        tx_m = processor.tx / 1000.0
-        tz_m = processor.tz / 1000.0
-        yaw_rad = np.radians(processor.yaw)
+        tx_m = float(pose_for_frame.get("x", 0.0)) / 1000.0
+        tz_m = float(pose_for_frame.get("z", 0.0)) / 1000.0
+        yaw_rad = np.radians(float(pose_for_frame.get("yaw", 0.0)))
         fov_rad = np.radians(90.0)
 
-        for model_source, model in detection_models:
+        yolo_start_time = time.time()
+        for model_index, (model_source, model) in enumerate(detection_models):
             is_landmark_model = model_source.startswith("landmark")
             confidence = LANDMARK_CONFIDENCE if is_landmark_model else COCO_CONFIDENCE
             image_size = LANDMARK_IMAGE_SIZE if is_landmark_model else COCO_IMAGE_SIZE
+            stride = LANDMARK_FRAME_STRIDE if is_landmark_model else COCO_FRAME_STRIDE
+            offset = model_index % stride
+            should_run_model = (
+                model_source not in cached_model_detections
+                or ((frame_index + offset) % stride == 0)
+            )
+
+            if not should_run_model:
+                cached_detections = [d.copy() for d in cached_model_detections.get(model_source, [])]
+                for cached_detection in cached_detections:
+                    cached_detection["fresh"] = False
+                detections.extend(cached_detections)
+                temp_semantic_objects.extend([obj.copy() for obj in cached_model_semantic_objects.get(model_source, [])])
+                continue
+
+            model_detections = []
+            model_semantic_objects = []
             results = model(
                 rgb_frame,
                 conf=confidence,
                 imgsz=image_size,
                 device=device,
+                half=(device == "cuda"),
+                max_det=YOLO_MAX_DETECTIONS,
                 verbose=False
             )
             result = results[0]
 
             if result.boxes is None or len(result.boxes) == 0:
+                cached_model_detections[model_source] = []
+                cached_model_semantic_objects[model_source] = []
                 continue
 
             for box in result.boxes:
@@ -874,6 +1252,8 @@ def vision_loop():
                     class_name = normalize_detection_label(model.names[cls_id])
                     if class_name not in ALLOWED_CLASSES:
                         continue
+                    if conf < class_confidence_threshold(class_name, is_landmark_model):
+                        continue
 
                     box_area = max(0, x2 - x1) * max(0, y2 - y1)
                     area_ratio = box_area / frame_area
@@ -883,6 +1263,15 @@ def vision_loop():
                         continue
                     if class_name == "person" and area_ratio < 0.10:
                         continue
+                    door_passable = None
+                    if is_landmark_model and is_door_landmark(class_name):
+                        if conf < DOOR_CONFIDENCE:
+                            continue
+                        if not looks_like_door_panel((x1, y1, x2, y2), (h, w)):
+                            continue
+                        door_passable = looks_like_passable_door(depth_frame, (x1, y1, x2, y2), (h, w))
+                        if normalize_detection_label(class_name) in OPEN_DOOR_LABELS and not door_passable:
+                            continue
                     if class_name == "exit sign":
                         if conf < EXIT_SIGN_CONFIDENCE:
                             continue
@@ -910,10 +1299,10 @@ def vision_loop():
                         z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
                         grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
                         grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
-                        semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+                        semantic_label = semantic_label_for_detection(class_name, door_passable)
                         mobility = classify_object_mobility(semantic_label)
                         object_color = object_color_for_label(semantic_label, mobility)
-                        temp_semantic_objects.append({
+                        semantic_object = {
                             "label": semantic_label,
                             "detected_label": class_name,
                             "classification": mobility,
@@ -925,7 +1314,11 @@ def vision_loop():
                             "distance": depth_distance,
                             "confidence": conf,
                             "box": (x1, y1, x2, y2),
-                        })
+                        }
+                        if door_passable is not None:
+                            semantic_object["passable"] = bool(door_passable)
+                            semantic_object["door_state"] = "open" if door_passable else "closed"
+                        model_semantic_objects.append(semantic_object)
 
                         if depth_distance < 0.8:
                             distance_lbl = "very close"
@@ -947,11 +1340,11 @@ def vision_loop():
                             distance_lbl = "far"
 
                     position = get_position_label(center_x, w)
-                    semantic_label = STATIC_NAVIGATION_LABELS.get(class_name, class_name)
+                    semantic_label = semantic_label_for_detection(class_name, door_passable)
                     mobility = classify_object_mobility(semantic_label)
                     object_color = object_color_for_label(semantic_label, mobility)
 
-                    detections.append({
+                    detection = {
                         "class_name": class_name,
                         "semantic_label": semantic_label,
                         "classification": mobility,
@@ -964,7 +1357,19 @@ def vision_loop():
                         "box": (x1, y1, x2, y2),
                         "depth_meters": depth_distance,
                         "source_model": model_source,
-                    })
+                        "fresh": True,
+                    }
+                    if door_passable is not None:
+                        detection["passable"] = bool(door_passable)
+                        detection["door_state"] = "open" if door_passable else "closed"
+                    model_detections.append(detection)
+
+            cached_model_detections[model_source] = [d.copy() for d in model_detections]
+            cached_model_semantic_objects[model_source] = [obj.copy() for obj in model_semantic_objects]
+            detections.extend(model_detections)
+            temp_semantic_objects.extend(model_semantic_objects)
+
+        yolo_ms = (time.time() - yolo_start_time) * 1000.0
 
         priority_landmark_boxes = [
             det["box"]
@@ -989,25 +1394,29 @@ def vision_loop():
                 )
             ]
 
+        detection_now = time.time()
+        detections = update_stable_detections(detections, detection_tracks, detection_now)
+        temp_semantic_objects = filter_semantic_objects_by_stable_detections(temp_semantic_objects, detections)
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
 
-        for det in detections:
-            x1, y1, x2, y2 = det["box"]
-            box_color = hex_to_bgr(det.get("color") or object_color_for_label(det["class_name"]))
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
-            label = f"{det['class_name']} | {det['classification']} | {det['position']} | {det['distance']}"
-            if det["depth_meters"] is not None:
-                label += f" | {det['depth_meters']:.1f}m"
+        if render_detections:
+            for det in detections:
+                x1, y1, x2, y2 = det["box"]
+                box_color = hex_to_bgr(det.get("color") or object_color_for_label(det["class_name"]))
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
+                label = f"{det['class_name']} | {det['classification']} | {det['position']} | {det['distance']}"
+                if det["depth_meters"] is not None:
+                    label += f" | {det['depth_meters']:.1f}m"
 
-            cv2.putText(
-                annotated,
-                label,
-                (x1, max(y1 - 10, 25)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                (255, 255, 255),
-                2
-            )
+                cv2.putText(
+                    annotated,
+                    label,
+                    (x1, max(y1 - 10, 25)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 255),
+                    2
+                )
 
         # 3. Exit Sign Detection (OCR + Green Color Segmentation)
         now = time.time()
@@ -1145,6 +1554,32 @@ def vision_loop():
         # Thread-safe global update
         with frame_lock:
             live_grid = processor.occupancy_grid.copy()
+            clear_now = time.time()
+            for obj in temp_semantic_objects:
+                label = str(obj.get("label") or obj.get("detected_label") or "").lower()
+                mobility = obj.get("mobility") or obj.get("classification") or classify_object_mobility(label)
+                if mobility != "dynamic":
+                    continue
+                gx = obj.get("x")
+                gz = obj.get("z")
+                if gx is None or gz is None:
+                    continue
+                dynamic_grid_clear_cells[(max(0, min(int(gz), 99)), max(0, min(int(gx), 99)))] = clear_now
+
+            dynamic_grid_clear_cells = {
+                cell: ts
+                for cell, ts in dynamic_grid_clear_cells.items()
+                if clear_now - ts <= DYNAMIC_GRID_CLEAR_TTL_S
+            }
+            for (gz, gx), _ts in dynamic_grid_clear_cells.items():
+                for dz in range(-DYNAMIC_GRID_CLEAR_RADIUS_CELLS, DYNAMIC_GRID_CLEAR_RADIUS_CELLS + 1):
+                    for dx in range(-DYNAMIC_GRID_CLEAR_RADIUS_CELLS, DYNAMIC_GRID_CLEAR_RADIUS_CELLS + 1):
+                        if dx * dx + dz * dz > DYNAMIC_GRID_CLEAR_RADIUS_CELLS * DYNAMIC_GRID_CLEAR_RADIUS_CELLS:
+                            continue
+                        nz = max(0, min(gz + dz, 99))
+                        nx = max(0, min(gx + dx, 99))
+                        live_grid[nz, nx] = 0
+
             for obj in temp_semantic_objects:
                 label = str(obj.get("label") or obj.get("detected_label") or "").lower()
                 mobility = obj.get("mobility") or obj.get("classification") or classify_object_mobility(label)
@@ -1168,15 +1603,20 @@ def vision_loop():
             latest_depth_map = depth_frame.copy()
             if not telemetry_source_active:
                 pose_data = {
-                    "x": float(processor.tx),
-                    "y": float(processor.ty),
-                    "z": float(processor.tz),
-                    "roll": float(processor.roll),
-                    "pitch": float(processor.pitch),
-                    "yaw": float(processor.yaw),
+                    "x": float(pose_for_frame.get("x", 0.0)),
+                    "y": float(pose_for_frame.get("y", 0.0)),
+                    "z": float(pose_for_frame.get("z", 0.0)),
+                    "roll": float(pose_for_frame.get("roll", 0.0)),
+                    "pitch": float(pose_for_frame.get("pitch", 0.0)),
+                    "yaw": float(pose_for_frame.get("yaw", 0.0)),
+                    "raw_x": float(processor.tx),
+                    "raw_y": float(processor.ty),
+                    "raw_z": float(processor.tz),
+                    "raw_yaw": float(processor.yaw),
                     "tracking_ok": bool(processor.is_tracking_ok),
                     "tracking_state": processor.tracking_state,
                     "vslam_enabled": bool(processor.positional_tracking_enabled),
+                    "pose_smoothed": True,
                 }
                 occupancy_grid = live_grid.tolist()
                 semantic_objects = temp_semantic_objects
@@ -1193,7 +1633,22 @@ def vision_loop():
         prev_time = current_time
 
         total_delay_ms = (current_time - frame_start_time) * 1000.0
-        push_telemetry(annotated, zones_data, detections, total_delay_ms, total_delay_ms, active_semantic_path)
+        with frame_lock:
+            performance_data = {
+                "fps": float(fps),
+                "frame_ms": float(total_delay_ms),
+                "depth_ms": float(depth_ms),
+                "yolo_ms": float(yolo_ms),
+                "model": COCO_MODEL_PATH,
+                "coco_stride": COCO_FRAME_STRIDE,
+                "landmark_stride": LANDMARK_FRAME_STRIDE,
+                "stable_detection_min_ms": LIVE_DETECTION_MIN_OBS_MS,
+            }
+        if ENABLE_TELEMETRY_STREAM:
+            push_telemetry(annotated, zones_data, detections, total_delay_ms, total_delay_ms, active_semantic_path)
+
+        if not display_enabled:
+            continue
 
         # 4. Render Dashboard Visual Panels
         display_w = 640
@@ -1248,7 +1703,7 @@ def vision_loop():
 
         # Left Column: Telemetry
         cv2.putText(hud, "SYSTEM TELEMETRY", (30, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 180, 180), 1, cv2.LINE_AA)
-        cv2.putText(hud, f"Model: ZED 1 + YOLOv8n", (30, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(hud, f"Model: ZED 1 + {COCO_MODEL_PATH}", (30, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
         cv2.putText(hud, f"FPS:   {fps:.1f} Hz", (30, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0) if fps > 10 else (0, 150, 255), 1, cv2.LINE_AA)
         cv2.putText(hud, f"Voice Assistant: Jarvis", (30, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 
@@ -1323,6 +1778,8 @@ def handle_vision_query(command: str, detections: list[dict], frame) -> str:
         "left_distance_mm": float(zones_data["left"]),
         "center_distance_mm": float(zones_data["center"]),
         "right_distance_mm": float(zones_data["right"]),
+        "center_open_space_ratio": float(zones_data.get("center_open_space_ratio", 0.0)),
+        "scene_hint": zones_data.get("scene_hint", "unknown"),
         "best_direction": guidance_cmd
     }
 

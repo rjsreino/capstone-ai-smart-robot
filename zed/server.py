@@ -72,7 +72,10 @@ def astar_pathfind(grid: list, start: tuple, goal: tuple) -> list:
                 
     return []
 
-whisper_model = whisper.load_model("tiny")
+WHISPER_MODEL_NAME = os.getenv("VICKY_WHISPER_MODEL", "tiny")
+WHISPER_DEVICE = os.getenv("VICKY_WHISPER_DEVICE", "cpu")
+whisper_model = None
+whisper_model_lock = threading.Lock()
 app = FastAPI()
 navigator = SemanticNavigator()
 spatial_memory = SpatialMemoryNavigationSystem()
@@ -80,9 +83,11 @@ spatial_memory = SpatialMemoryNavigationSystem()
 AUTO_MAPPING_ENABLED = os.getenv("VICKY_AUTO_MAPPING", "1").strip().lower() not in {"0", "false", "no"}
 AUTO_MAPPING_NAME = os.getenv("VICKY_AUTO_MAP_NAME", "Auto Room")
 AUTO_MAPPING_SAVE_INTERVAL = float(os.getenv("VICKY_AUTO_MAP_SAVE_INTERVAL", "5.0"))
+AUTO_MAPPING_REFRESH_INTERVAL = float(os.getenv("VICKY_AUTO_MAP_REFRESH_INTERVAL", "2.0"))
 AUTO_MAPPING_MIN_LANDMARKS = int(os.getenv("VICKY_AUTO_MAP_MIN_LANDMARKS", "1"))
 MAPPING_PROMPT_ENABLED = os.getenv("VICKY_MAPPING_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
 DOORWAY_TRANSITION_PROMPT_ENABLED = os.getenv("VICKY_DOORWAY_TRANSITION_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
+STATUS_CACHE_TTL = float(os.getenv("VICKY_STATUS_CACHE_TTL", "0.25"))
 
 auto_mapping_thread = None
 auto_mapping_running = False
@@ -90,6 +95,8 @@ mapping_prompt_pending = MAPPING_PROMPT_ENABLED
 mapping_prompt_awaiting_answer = False
 doorway_transition_awaiting_answer = False
 doorway_transition_context = None
+status_cache_time = 0.0
+status_cache_data = None
 
 
 def _object_mobility(label, fallback=None):
@@ -116,36 +123,52 @@ def _format_llm_detection(d):
     }
 
 
+def get_whisper_model():
+    global whisper_model
+    if whisper_model is None:
+        with whisper_model_lock:
+            if whisper_model is None:
+                print(f"[WHISPER] Loading {WHISPER_MODEL_NAME} on {WHISPER_DEVICE} for transcription.")
+                whisper_model = whisper.load_model(WHISPER_MODEL_NAME, device=WHISPER_DEVICE)
+    return whisper_model
+
+
 def get_live_spatial_snapshot():
     with zva.frame_lock:
         grid = [row[:] for row in zva.occupancy_grid]
         semantic_objects = [obj.copy() for obj in getattr(zva, "semantic_objects", [])]
-        for obj in semantic_objects:
-            label = str(obj.get("label") or obj.get("detected_label") or "").lower()
-            mobility = _object_mobility(label, obj.get("mobility") or obj.get("classification"))
-            obj["classification"] = mobility
-            obj["mobility"] = mobility
-            obj["color"] = obj.get("color") or _object_color(label, mobility)
-            if mobility != "static":
-                continue
-            gx = obj.get("x")
-            gz = obj.get("z")
-            if gx is None or gz is None:
-                continue
-            gx = max(0, min(int(gx), 99))
-            gz = max(0, min(int(gz), 99))
-            marker = 2 if "door" in label or "exit" in label else 1
-            for dz in range(-1, 2):
-                for dx in range(-1, 2):
-                    nz = max(0, min(gz + dz, 99))
-                    nx = max(0, min(gx + dx, 99))
-                    grid[nz][nx] = marker
-        return {
-            "grid": grid,
-            "semantic_objects": semantic_objects,
-            "pose": dict(zva.pose_data),
-            "detections": [d.copy() for d in zva.latest_detections],
-        }
+        pose = dict(zva.pose_data)
+        detections = [d.copy() for d in zva.latest_detections]
+        zones = dict(zva.zones_data)
+
+    for obj in semantic_objects:
+        label = str(obj.get("label") or obj.get("detected_label") or "").lower()
+        mobility = _object_mobility(label, obj.get("mobility") or obj.get("classification"))
+        obj["classification"] = mobility
+        obj["mobility"] = mobility
+        obj["color"] = obj.get("color") or _object_color(label, mobility)
+        if mobility != "static":
+            continue
+        gx = obj.get("x")
+        gz = obj.get("z")
+        if gx is None or gz is None:
+            continue
+        gx = max(0, min(int(gx), 99))
+        gz = max(0, min(int(gz), 99))
+        marker = 2 if "door" in label or "exit" in label else 1
+        for dz in range(-1, 2):
+            for dx in range(-1, 2):
+                nz = max(0, min(gz + dz, 99))
+                nx = max(0, min(gx + dx, 99))
+                grid[nz][nx] = marker
+
+    return {
+        "grid": grid,
+        "semantic_objects": semantic_objects,
+        "pose": pose,
+        "detections": detections,
+        "zones": zones,
+    }
 
 
 def _landmark_count(map_data):
@@ -232,6 +255,7 @@ def _start_exit_navigation_response(command_text, snapshot):
     guidance_payload = spatial_memory.navigation_guidance(
         pose=snapshot["pose"],
         semantic_objects=snapshot["semantic_objects"],
+        zones=snapshot.get("zones"),
     )
     instruction = guidance_payload.get("instruction") or "Route planned."
     target = best["door"]
@@ -281,6 +305,26 @@ def _doorway_transition_prompt_payload():
         "requires_answer": True,
         "answer_type": "yes_no",
         "prompt_id": "new_room_mapping",
+        "options": ["yes", "no"],
+    }
+
+
+def _mapping_prompt_payload():
+    current_map = spatial_memory.state.get("current_map")
+    guidance = "Do you want to start mapping this room?"
+    if current_map:
+        guidance = (
+            f"A saved map named {current_map.get('map_name', 'this room')} is loaded. "
+            "Do you want to start mapping this room again?"
+        )
+    return {
+        "active": True,
+        "guidance": guidance,
+        "target": "mapping",
+        "source": "mapping_prompt",
+        "requires_answer": True,
+        "answer_type": "yes_no",
+        "prompt_id": "start_mapping",
         "options": ["yes", "no"],
     }
 
@@ -371,6 +415,82 @@ def _handle_pending_yes_no_prompt(command_text, snapshot):
     return None
 
 
+def _answer_prompt_direct(prompt_id, answer_text, snapshot):
+    global mapping_prompt_pending, mapping_prompt_awaiting_answer
+    global doorway_transition_awaiting_answer, doorway_transition_context
+
+    command_text = str(answer_text or "").strip().lower()
+    prompt_id = str(prompt_id or "").strip()
+
+    handled = _handle_pending_yes_no_prompt(command_text, snapshot)
+    if handled:
+        return handled
+
+    if prompt_id == "start_mapping":
+        mapping_prompt_pending = False
+        mapping_prompt_awaiting_answer = False
+        if _is_yes_response(command_text):
+            current_map = spatial_memory.start_mapping(
+                map_name=AUTO_MAPPING_NAME,
+                live_grid=snapshot["grid"],
+                semantic_objects=snapshot["semantic_objects"],
+                pose=snapshot["pose"],
+            )
+            return {
+                "transcript": "yes",
+                "response": (
+                    f"Mapping started for {current_map['map_name']}. "
+                    "Please slowly look around the room. Turn left and right so I can find doors, exits, and obstacles."
+                ),
+                "prompt_resolved": True,
+                "prompt_id": "start_mapping",
+            }
+        if _is_no_response(command_text):
+            return {
+                "transcript": "no",
+                "response": "Okay. I will not start mapping yet. Say start mapping when you are ready.",
+                "prompt_resolved": True,
+                "prompt_id": "start_mapping",
+            }
+
+    if prompt_id == "new_room_mapping":
+        if _is_yes_response(command_text):
+            if doorway_transition_context:
+                return _start_new_room_mapping_from_transition(snapshot)
+            doorway_transition_awaiting_answer = False
+            current_map = spatial_memory.start_mapping(
+                map_name=_next_room_name(),
+                live_grid=snapshot["grid"],
+                semantic_objects=snapshot["semantic_objects"],
+                pose=snapshot["pose"],
+            )
+            return {
+                "transcript": "yes",
+                "response": (
+                    f"New room mapping started for {current_map['map_name']}. "
+                    "Please slowly look around this room so I can find doors, exits, and obstacles."
+                ),
+                "prompt_resolved": True,
+                "prompt_id": "new_room_mapping",
+            }
+        if _is_no_response(command_text):
+            doorway_transition_awaiting_answer = False
+            doorway_transition_context = None
+            return {
+                "transcript": "no",
+                "response": "Okay. I will keep the current map loaded and will not start a new room map yet.",
+                "prompt_resolved": True,
+                "prompt_id": "new_room_mapping",
+            }
+
+    return {
+        "transcript": command_text,
+        "response": "That prompt has expired. Live guidance is back on.",
+        "prompt_resolved": True,
+        "prompt_id": prompt_id or "prompt",
+    }
+
+
 def auto_mapping_loop():
     last_save_at = 0.0
     while auto_mapping_running:
@@ -386,6 +506,7 @@ def auto_mapping_loop():
                 if (
                     current_map
                     and _landmark_count(current_map) >= AUTO_MAPPING_MIN_LANDMARKS
+                    and not current_map.get("metadata", {}).get("awaiting_user_name")
                     and now - last_save_at >= AUTO_MAPPING_SAVE_INTERVAL
                 ):
                     spatial_memory.save_current_map(
@@ -400,7 +521,7 @@ def auto_mapping_loop():
         except Exception as exc:
             print(f"[AUTO MAP] Error: {exc}")
 
-        time.sleep(1.0)
+        time.sleep(AUTO_MAPPING_REFRESH_INTERVAL)
 
 
 def start_auto_mapping():
@@ -566,88 +687,115 @@ def root():
 
 @app.get("/status")
 def status():
+    global status_cache_time, status_cache_data
+    now = time.time()
+    if status_cache_data is not None and now - status_cache_time < STATUS_CACHE_TTL:
+        return status_cache_data
+
     with zva.frame_lock:
-        detections = [
-            {
-                "object": d["class_name"],
-                "semantic_label": d.get("semantic_label", d["class_name"]),
-                "position": d["position"],
-                "distance": d["distance"],
-                "depth_meters": d.get("depth_meters"),
-                "classification": _object_mobility(
-                    d.get("semantic_label", d["class_name"]),
-                    d.get("mobility") or d.get("classification"),
-                ),
-                "mobility": _object_mobility(
-                    d.get("semantic_label", d["class_name"]),
-                    d.get("mobility") or d.get("classification"),
-                ),
-                "color": d.get("color") or _object_color(
-                    d.get("semantic_label", d["class_name"]),
-                    d.get("mobility") or d.get("classification"),
-                ),
-                "confidence": round(d["confidence"], 2)
-            }
-            for d in zva.latest_detections
-        ]
-        
-        current_map = spatial_memory.state.get("current_map")
-        user_grid_z, user_grid_x = spatial_memory.pose_to_grid(zva.pose_data)
-        status_grid = current_map.get("static_grid") if current_map else zva.occupancy_grid
+        raw_detections = [d.copy() for d in zva.latest_detections]
+        pose_snapshot = dict(zva.pose_data)
+        zones_snapshot = dict(zva.zones_data)
+        grid_snapshot = [row[:] for row in zva.occupancy_grid]
+        semantic_snapshot = [obj.copy() for obj in getattr(zva, "semantic_objects", [])]
+        performance_snapshot = dict(getattr(zva, "performance_data", {}))
+        guidance_snapshot = zva.guidance_cmd
 
-        if spatial_memory.state.get("active_path"):
-            path = spatial_memory.state.get("active_path", [])
-            active_goal = spatial_memory.state.get("active_goal")
-            goal_data = {"x": active_goal[1], "z": active_goal[0]} if active_goal else None
-        elif current_goal is None:
-            path = []
-            goal_data = None
-        else:
-            path = astar_pathfind(status_grid, (user_grid_z, user_grid_x), current_goal)
-            goal_data = {"x": current_goal[1], "z": current_goal[0]}
+    detections = []
+    for d in raw_detections:
+        label = d.get("semantic_label", d.get("class_name", "object"))
+        mobility = _object_mobility(label, d.get("mobility") or d.get("classification"))
+        detections.append({
+            "object": d.get("class_name", label),
+            "semantic_label": label,
+            "position": d.get("position"),
+            "distance": d.get("distance"),
+            "depth_meters": d.get("depth_meters"),
+            "classification": mobility,
+            "mobility": mobility,
+            "color": d.get("color") or _object_color(label, mobility),
+            "confidence": round(float(d.get("confidence", 0.0)), 2),
+            "passable": d.get("passable"),
+            "door_state": d.get("door_state"),
+        })
 
-        live_objects = spatial_memory.semantic_objects_to_current_map(
-            getattr(zva, "semantic_objects", [])
-        )
-        live_static_count = sum(1 for obj in live_objects if _object_mobility(
-            obj.get("label") or obj.get("detected_label"),
-            obj.get("mobility") or obj.get("classification"),
-        ) == "static")
-        live_dynamic_count = max(0, len(live_objects) - live_static_count)
+    current_map = spatial_memory.state.get("current_map")
+    user_grid_z, user_grid_x = spatial_memory.pose_to_grid(pose_snapshot)
+    status_grid = current_map.get("static_grid") if current_map else grid_snapshot
 
-        return {
-            "guidance": zva.guidance_cmd,
-            "left_distance": zva.zones_data.get("left", 0),
-            "center_distance": zva.zones_data.get("center", 0),
-            "right_distance": zva.zones_data.get("right", 0),
-            "detections": detections,
-            "pose": zva.pose_data,
-            "map": status_grid,
-            "path": path,
-            "goal": goal_data,
-            "user_grid": {"x": user_grid_x, "z": user_grid_z},
-            "objects": live_objects,
-            "spatial_memory": {
-                "mode": spatial_memory.state.get("mode"),
-                "current_map_id": spatial_memory.state.get("current_map_id"),
-                "current_map_name": current_map.get("map_name") if current_map else None,
-                "landmark_count": _landmark_count(current_map),
-                "static_object_count": len(current_map.get("static_objects", [])) if current_map else 0,
-                "live_static_count": live_static_count,
-                "live_dynamic_count": live_dynamic_count,
-                "tracking_ok": bool(zva.pose_data.get("tracking_ok")),
-                "tracking_state": zva.pose_data.get("tracking_state", "UNKNOWN"),
-                "mapping_prompt_pending": mapping_prompt_pending,
-                "mapping_prompt_awaiting_answer": mapping_prompt_awaiting_answer,
-                "doorway_transition_awaiting_answer": doorway_transition_awaiting_answer,
-                "active_prompt": (
-                    "new_room_mapping" if doorway_transition_awaiting_answer
-                    else "start_mapping" if mapping_prompt_awaiting_answer
-                    else None
-                ),
-            },
-        }
-        
+    if spatial_memory.state.get("active_path"):
+        path = spatial_memory.state.get("active_path", [])
+        active_goal = spatial_memory.state.get("active_goal")
+        goal_data = {"x": active_goal[1], "z": active_goal[0]} if active_goal else None
+    elif current_goal is None:
+        path = []
+        goal_data = None
+    else:
+        path = astar_pathfind(status_grid, (user_grid_z, user_grid_x), current_goal)
+        goal_data = {"x": current_goal[1], "z": current_goal[0]}
+
+    live_objects = spatial_memory.semantic_objects_to_current_map(semantic_snapshot)
+    live_static_count = sum(1 for obj in live_objects if _object_mobility(
+        obj.get("label") or obj.get("detected_label"),
+        obj.get("mobility") or obj.get("classification"),
+    ) == "static")
+    live_dynamic_count = max(0, len(live_objects) - live_static_count)
+
+    response = {
+        "guidance": guidance_snapshot,
+        "left_distance": zones_snapshot.get("left", 0),
+        "center_distance": zones_snapshot.get("center", 0),
+        "right_distance": zones_snapshot.get("right", 0),
+        "center_open_space_ratio": zones_snapshot.get("center_open_space_ratio", 0),
+        "full_open_space_ratio": zones_snapshot.get("full_open_space_ratio", 0),
+        "scene_hint": zones_snapshot.get("scene_hint"),
+        "detections": detections,
+        "pose": pose_snapshot,
+        "performance": performance_snapshot,
+        "map": status_grid,
+        "path": path,
+        "goal": goal_data,
+        "user_grid": {"x": user_grid_x, "z": user_grid_z},
+        "objects": live_objects,
+        "spatial_memory": {
+            "mode": spatial_memory.state.get("mode"),
+            "current_map_id": spatial_memory.state.get("current_map_id"),
+            "current_map_name": current_map.get("map_name") if current_map else None,
+            "landmark_count": _landmark_count(current_map),
+            "static_object_count": len(current_map.get("static_objects", [])) if current_map else 0,
+            "live_static_count": live_static_count,
+            "live_dynamic_count": live_dynamic_count,
+            "tracking_ok": bool(pose_snapshot.get("tracking_ok")),
+            "tracking_state": pose_snapshot.get("tracking_state", "UNKNOWN"),
+            "mapping_prompt_pending": mapping_prompt_pending,
+            "mapping_prompt_awaiting_answer": mapping_prompt_awaiting_answer,
+            "doorway_transition_awaiting_answer": doorway_transition_awaiting_answer,
+            "active_prompt": (
+                "new_room_mapping" if doorway_transition_awaiting_answer
+                else "start_mapping" if mapping_prompt_awaiting_answer
+                else None
+            ),
+        },
+    }
+    status_cache_data = response
+    status_cache_time = now
+    return response
+
+
+@app.get("/pose")
+def pose_status():
+    with zva.frame_lock:
+        pose_snapshot = dict(zva.pose_data)
+
+    user_grid_z, user_grid_x = spatial_memory.pose_to_grid(pose_snapshot)
+    return {
+        "pose": pose_snapshot,
+        "user_grid": {"x": user_grid_x, "z": user_grid_z},
+        "tracking_ok": bool(pose_snapshot.get("tracking_ok")),
+        "tracking_state": pose_snapshot.get("tracking_state", "UNKNOWN"),
+    }
+
+
 @app.get("/autopilot-guidance")
 def autopilot_guidance():
     global mapping_prompt_pending, mapping_prompt_awaiting_answer
@@ -659,6 +807,7 @@ def autopilot_guidance():
         guidance_payload = spatial_memory.navigation_guidance(
             pose=snapshot["pose"],
             semantic_objects=snapshot["semantic_objects"],
+            zones=snapshot.get("zones"),
         )
         instruction = guidance_payload.get("instruction")
         if guidance_payload.get("active") and instruction:
@@ -691,26 +840,13 @@ def autopilot_guidance():
     if doorway_transition_awaiting_answer and spatial_mode == "idle":
         return _doorway_transition_prompt_payload()
 
+    if mapping_prompt_awaiting_answer and spatial_mode == "idle":
+        return _mapping_prompt_payload()
+
     if mapping_prompt_pending and spatial_mode == "idle":
         mapping_prompt_pending = False
         mapping_prompt_awaiting_answer = True
-        current_map = spatial_memory.state.get("current_map")
-        guidance = "Do you want to start mapping this room?"
-        if current_map:
-            guidance = (
-                f"A saved map named {current_map.get('map_name', 'this room')} is loaded. "
-                "Do you want to start mapping this room again?"
-            )
-        return {
-            "active": True,
-            "guidance": guidance,
-            "target": "mapping",
-            "source": "mapping_prompt",
-            "requires_answer": True,
-            "answer_type": "yes_no",
-            "prompt_id": "start_mapping",
-            "options": ["yes", "no"],
-        }
+        return _mapping_prompt_payload()
 
     with zva.frame_lock:
         detections = list(zva.latest_detections)
@@ -1587,7 +1723,7 @@ def map_view():
             }
         }
 
-        setInterval(fetchStatus, 300);
+        setInterval(fetchStatus, 750);
         fetchStatus();
     </script>
 </body>
@@ -1632,6 +1768,8 @@ def manual_command(payload: dict):
             "left_distance_mm": float(zones_data.get("left", 0)),
             "center_distance_mm": float(zones_data.get("center", 0)),
             "right_distance_mm": float(zones_data.get("right", 0)),
+            "center_open_space_ratio": float(zones_data.get("center_open_space_ratio", 0)),
+            "scene_hint": zones_data.get("scene_hint", "unknown"),
             "best_direction": guidance,
         },
         ocr_text=""
@@ -1651,7 +1789,7 @@ def start_mapping(payload: dict):
     doorway_transition_awaiting_answer = False
     doorway_transition_context = None
     snapshot = get_live_spatial_snapshot()
-    map_name = payload.get("map_name") or "Room"
+    map_name = str(payload.get("map_name") or "Room").strip() or "Room"
     map_id = payload.get("map_id")
     current_map = spatial_memory.start_mapping(
         map_name=map_name,
@@ -1660,6 +1798,8 @@ def start_mapping(payload: dict):
         semantic_objects=snapshot["semantic_objects"],
         pose=snapshot["pose"],
     )
+    if payload.get("awaiting_name") or payload.get("defer_save_name"):
+        current_map.setdefault("metadata", {})["awaiting_user_name"] = True
     return {
         "status": "mapping",
         "message": "Slowly turn around and scan the room.",
@@ -1667,17 +1807,38 @@ def start_mapping(payload: dict):
     }
 
 
-@app.post("/save-map")
-def save_spatial_map():
+@app.post("/answer-prompt")
+def answer_prompt(payload: dict):
     snapshot = get_live_spatial_snapshot()
+    return _answer_prompt_direct(
+        prompt_id=payload.get("prompt_id") or payload.get("id"),
+        answer_text=payload.get("answer") or payload.get("command"),
+        snapshot=snapshot,
+    )
+
+
+@app.post("/save-map")
+def save_spatial_map(payload: dict = None):
+    payload = payload or {}
+    min_observed_ms = max(0, min(int(payload.get("min_observed_ms") or 0), 2000))
+    snapshot = get_live_spatial_snapshot()
+    if min_observed_ms:
+        spatial_memory.refresh_mapping(
+            live_grid=snapshot["grid"],
+            semantic_objects=snapshot["semantic_objects"],
+        )
+        time.sleep(min_observed_ms / 1000.0)
+        snapshot = get_live_spatial_snapshot()
     current_map = spatial_memory.save_current_map(
         live_grid=snapshot["grid"],
         semantic_objects=snapshot["semantic_objects"],
+        map_name=payload.get("map_name"),
     )
     if not current_map:
         raise HTTPException(status_code=400, detail="No active map to save.")
     return {
         "status": "saved",
+        "message": "Room saved.",
         "map_id": current_map["map_id"],
         "map_name": current_map["map_name"],
         "file_name": f"{current_map['map_id']}.json",
@@ -1764,6 +1925,7 @@ def navigation_guidance():
     return spatial_memory.navigation_guidance(
         pose=snapshot["pose"],
         semantic_objects=snapshot["semantic_objects"],
+        zones=snapshot.get("zones"),
     )
 
 
@@ -1796,7 +1958,7 @@ async def voice_command(file: UploadFile = File(...)):
         temp_audio.write(audio_bytes)
         temp_audio_path = temp_audio.name
 
-    result = whisper_model.transcribe(temp_audio_path, language="en")
+    result = get_whisper_model().transcribe(temp_audio_path, language="en")
     command_text = result["text"].strip().lower()
 
     with zva.frame_lock:
@@ -1838,7 +2000,7 @@ async def voice_command(file: UploadFile = File(...)):
         if current_map:
             return {
                 "transcript": command_text,
-                "response": f"Map saved as {current_map['map_name']} with {len(current_map.get('landmarks', []))} landmarks."
+                "response": "Room saved."
             }
         return {
             "transcript": command_text,
@@ -1903,6 +2065,8 @@ async def voice_command(file: UploadFile = File(...)):
             "left_distance_mm": float(zones_data.get("left", 0)),
             "center_distance_mm": float(zones_data.get("center", 0)),
             "right_distance_mm": float(zones_data.get("right", 0)),
+            "center_open_space_ratio": float(zones_data.get("center_open_space_ratio", 0)),
+            "scene_hint": zones_data.get("scene_hint", "unknown"),
             "best_direction": guidance,
         },
         ocr_text=""
@@ -1958,7 +2122,7 @@ def text_command(payload: dict):
         if current_map:
             return {
                 "transcript": command_text,
-                "response": f"Map saved as {current_map['map_name']} with {len(current_map.get('landmarks', []))} landmarks."
+                "response": "Room saved."
             }
         return {
             "transcript": command_text,
@@ -2022,6 +2186,8 @@ def text_command(payload: dict):
             "left_distance_mm": float(zones_data.get("left", 0)),
             "center_distance_mm": float(zones_data.get("center", 0)),
             "right_distance_mm": float(zones_data.get("right", 0)),
+            "center_open_space_ratio": float(zones_data.get("center_open_space_ratio", 0)),
+            "scene_hint": zones_data.get("scene_hint", "unknown"),
             "best_direction": guidance,
         },
         ocr_text=""
@@ -2081,7 +2247,7 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
         temp_audio.write(audio_bytes)
         temp_audio_path = temp_audio.name
 
-    result = whisper_model.transcribe(temp_audio_path, language="en")
+    result = get_whisper_model().transcribe(temp_audio_path, language="en")
     transcript = result["text"].strip()
     return {"transcript": transcript}
 
