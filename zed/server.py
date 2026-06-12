@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
+﻿from fastapi import FastAPI, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
 import uvicorn
 import threading
 import zed_vision_assistant as zva
