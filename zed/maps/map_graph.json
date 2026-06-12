@@ -14,5 +14,9 @@
   "auto_room_260611_191638": {
     "name": "Auto Room",
     "exits": []
+  },
+  "room201_260612_152821": {
+    "name": "room201",
+    "exits": []
   }
 }
