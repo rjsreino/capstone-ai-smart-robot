@@ -6,6 +6,12 @@ import os
 import time
 import uuid
 from pathlib import Path
+from map_coordinates import (
+    POSE_Z_SIGN,
+    bearing_to_grid_delta,
+    forward_grid_cell,
+    pose_mm_to_grid,
+)
 
 
 STATIC_LANDMARK_CLASSES = {
@@ -69,8 +75,25 @@ OBJECT_CLASSIFICATION_COLORS = {
     "landmark": "#facc15",
     "exit": "#22f59c",
 }
-EXIT_REACHED_RADIUS_CELLS = 4
-DOORWAY_APPROACH_RADIUS_CELLS = int(os.getenv("VICKY_DOORWAY_APPROACH_RADIUS_CELLS", "8"))
+CELL_FREE = 0
+CELL_WALL = 1
+CELL_UNKNOWN = 2
+CELL_STATIC_OBJECT = 3
+CELL_DYNAMIC_OBJECT = 4
+CELL_DOORWAY = 5
+CELL_UNKNOWN_OBSTACLE = 6
+CELL_TYPE_LABELS = {
+    CELL_FREE: "free",
+    CELL_WALL: "wall",
+    CELL_UNKNOWN: "unknown",
+    CELL_STATIC_OBJECT: "static_object",
+    CELL_DYNAMIC_OBJECT: "dynamic_object",
+    CELL_DOORWAY: "doorway",
+    CELL_UNKNOWN_OBSTACLE: "unknown_obstacle",
+}
+EXIT_REACHED_RADIUS_CELLS = int(os.getenv("VICKY_EXIT_REACHED_RADIUS_CELLS", "8"))
+EXIT_PASSED_RADIUS_CELLS = int(os.getenv("VICKY_EXIT_PASSED_RADIUS_CELLS", "11"))
+DOORWAY_APPROACH_RADIUS_CELLS = int(os.getenv("VICKY_DOORWAY_APPROACH_RADIUS_CELLS", "14"))
 DOORWAY_FORWARD_CLEARANCE_MM = float(os.getenv("VICKY_DOORWAY_FORWARD_CLEARANCE_MM", "1500"))
 DOORWAY_OPEN_SPACE_RATIO = float(os.getenv("VICKY_DOORWAY_OPEN_SPACE_RATIO", "0.25"))
 EXIT_ROUTE_GOAL_SEARCH_RADIUS_CELLS = int(os.getenv("VICKY_EXIT_ROUTE_GOAL_SEARCH_RADIUS_CELLS", "8"))
@@ -83,6 +106,7 @@ MAPPING_OBJECT_MIN_OBSERVED_MS = int(os.getenv("VICKY_MAPPING_OBJECT_MIN_OBS_MS"
 WALL_MIN_COMPONENT_CELLS = int(os.getenv("VICKY_WALL_MIN_COMPONENT_CELLS", "3"))
 MAPPING_OBJECT_STABILITY_RADIUS_CELLS = int(os.getenv("VICKY_MAPPING_OBJECT_STABILITY_RADIUS_CELLS", "4"))
 MAPPING_DYNAMIC_CLEAR_RADIUS_CELLS = int(os.getenv("VICKY_MAPPING_DYNAMIC_CLEAR_RADIUS_CELLS", "4"))
+MAP_Z_SIGN = POSE_Z_SIGN
 
 
 def _clamp(value, low, high):
@@ -91,6 +115,10 @@ def _clamp(value, low, high):
 
 def _normalize_label(label):
     return str(label or "").strip().lower().replace("_", " ").replace("-", " ")
+
+
+def _bearing_to_grid_delta(dx, dz):
+    return bearing_to_grid_delta(dx, dz)
 
 
 def classify_object_mobility(label):
@@ -154,11 +182,14 @@ class SpatialMemoryNavigationSystem:
             "navigation_target": None,
             "navigation_landmark_goal": None,
             "last_goal_distance_cells": None,
+            "last_landmark_distance_cells": None,
             "last_path_distance_cells": None,
             "last_closest_path_index": None,
             "last_reroute_reason": None,
             "exit_reached": False,
             "exit_approach_announced": False,
+            "exit_passed_announced": False,
+            "last_navigation_event": None,
             "map_session_origin_grid": None,
             "map_session_origin_pose": None,
         }
@@ -206,11 +237,13 @@ class SpatialMemoryNavigationSystem:
         return normalized
 
     def _raw_pose_to_grid(self, pose):
-        x_m = float(pose.get("x", 0.0)) / 1000.0
-        z_m = float(pose.get("z", 0.0)) / 1000.0
-        gx = _clamp(int(x_m / self.cell_size_m) + self.width // 2, 0, self.width - 1)
-        gz = _clamp(int(z_m / self.cell_size_m) + self.height // 2, 0, self.height - 1)
-        return gz, gx
+        return pose_mm_to_grid(
+            pose.get("x", 0.0),
+            pose.get("z", 0.0),
+            cell_size_m=self.cell_size_m,
+            width=self.width,
+            height=self.height,
+        )
 
     def _origin_grid_for_map(self, map_data):
         session_origin = self.state.get("map_session_origin_grid")
@@ -329,6 +362,128 @@ class SpatialMemoryNavigationSystem:
                 else:
                     counts["special"] += 1
         return counts
+
+    def _cell_type_counts(self, cell_type_grid):
+        counts = {label: 0 for label in CELL_TYPE_LABELS.values()}
+        for row in cell_type_grid or []:
+            for cell in row or []:
+                label = CELL_TYPE_LABELS.get(int(cell), "unknown")
+                counts[label] = counts.get(label, 0) + 1
+        return counts
+
+    def _classify_occupied_components(self, static_grid):
+        normalized = self._normalize_grid(static_grid)
+        cell_types = [[CELL_UNKNOWN for _ in range(self.width)] for _ in range(self.height)]
+        for z in range(self.height):
+            for x in range(self.width):
+                value = int(normalized[z][x])
+                if value == 0:
+                    cell_types[z][x] = CELL_FREE
+                elif value == 2:
+                    cell_types[z][x] = CELL_UNKNOWN
+
+        visited = [[False for _ in range(self.width)] for _ in range(self.height)]
+        for start_z in range(self.height):
+            for start_x in range(self.width):
+                if visited[start_z][start_x] or int(normalized[start_z][start_x]) != 1:
+                    continue
+
+                stack = [(start_z, start_x)]
+                component = []
+                visited[start_z][start_x] = True
+                while stack:
+                    z, x = stack.pop()
+                    component.append((z, x))
+                    for dz, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nz, nx = z + dz, x + dx
+                        if not (0 <= nz < self.height and 0 <= nx < self.width):
+                            continue
+                        if visited[nz][nx] or int(normalized[nz][nx]) != 1:
+                            continue
+                        visited[nz][nx] = True
+                        stack.append((nz, nx))
+
+                zs = [z for z, _ in component]
+                xs = [x for _, x in component]
+                comp_h = max(zs) - min(zs) + 1
+                comp_w = max(xs) - min(xs) + 1
+                long_side = max(comp_h, comp_w)
+                short_side = max(1, min(comp_h, comp_w))
+                aspect = long_side / short_side
+                is_wall_like = len(component) >= WALL_MIN_COMPONENT_CELLS and (
+                    aspect >= 2.4 or long_side >= 7 or len(component) >= 14
+                )
+                cell_type = CELL_WALL if is_wall_like else CELL_UNKNOWN_OBSTACLE
+                for z, x in component:
+                    cell_types[z][x] = cell_type
+
+        return cell_types
+
+    def _paint_cell_type_disk(self, cell_type_grid, grid_z, grid_x, cell_type, radius=2):
+        grid_z = _clamp(int(grid_z), 0, self.height - 1)
+        grid_x = _clamp(int(grid_x), 0, self.width - 1)
+        radius = max(0, int(radius))
+        for dz in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                if dx * dx + dz * dz > radius * radius:
+                    continue
+                nz = _clamp(grid_z + dz, 0, self.height - 1)
+                nx = _clamp(grid_x + dx, 0, self.width - 1)
+                cell_type_grid[nz][nx] = cell_type
+
+    def build_cell_type_grid(self, static_grid, static_objects=None, landmarks=None, live_dynamic_obstacles=None):
+        cell_types = self._classify_occupied_components(static_grid)
+
+        for obj in static_objects or []:
+            label = _normalize_label(obj.get("label") or obj.get("class_name") or obj.get("detected_label"))
+            gx = obj.get("grid_x", obj.get("x"))
+            gz = obj.get("grid_z", obj.get("z"))
+            if gx is None or gz is None:
+                continue
+            cell_type = CELL_DOORWAY if label in EXIT_LANDMARK_TYPES or "door" in label or "exit" in label else CELL_STATIC_OBJECT
+            self._paint_cell_type_disk(cell_types, gz, gx, cell_type, radius=2)
+
+        for landmark in landmarks or []:
+            landmark_type = _normalize_label(landmark.get("type"))
+            gx = landmark.get("grid_x")
+            gz = landmark.get("grid_z")
+            if gx is None or gz is None:
+                continue
+            cell_type = CELL_DOORWAY if landmark_type in EXIT_LANDMARK_TYPES else CELL_STATIC_OBJECT
+            self._paint_cell_type_disk(cell_types, gz, gx, cell_type, radius=2)
+
+        for obstacle in live_dynamic_obstacles or []:
+            gx = obstacle.get("grid_x", obstacle.get("x"))
+            gz = obstacle.get("grid_z", obstacle.get("z"))
+            if gx is None or gz is None:
+                continue
+            self._paint_cell_type_disk(cell_types, gz, gx, CELL_DYNAMIC_OBJECT, radius=2)
+
+        return cell_types
+
+    def overlay_live_dynamic_cell_types(self, base_cell_type_grid, live_dynamic_obstacles=None):
+        cell_types = [list(row) for row in self._normalize_grid(base_cell_type_grid)]
+        for obstacle in live_dynamic_obstacles or []:
+            gx = obstacle.get("grid_x", obstacle.get("x"))
+            gz = obstacle.get("grid_z", obstacle.get("z"))
+            if gx is None or gz is None:
+                continue
+            self._paint_cell_type_disk(cell_types, gz, gx, CELL_DYNAMIC_OBJECT, radius=2)
+        return cell_types
+
+    def _refresh_cell_type_grid(self, map_data, live_dynamic_obstacles=None):
+        if not map_data:
+            return None
+        cell_type_grid = self.build_cell_type_grid(
+            map_data.get("static_grid"),
+            map_data.get("static_objects", []),
+            map_data.get("landmarks", []),
+            live_dynamic_obstacles or [],
+        )
+        map_data["cell_type_grid"] = cell_type_grid
+        map_data.setdefault("metadata", {})["cell_type_counts"] = self._cell_type_counts(cell_type_grid)
+        map_data["metadata"]["cell_type_labels"] = CELL_TYPE_LABELS
+        return cell_type_grid
 
     def _merge_static_grid(self, existing_grid, live_grid):
         existing = self._normalize_grid(existing_grid)
@@ -636,6 +791,7 @@ class SpatialMemoryNavigationSystem:
         stable_objects_map = self._stable_mapping_objects(semantic_objects_map)
         self.update_static_objects(current_map, stable_objects_map)
         self.update_static_landmarks(current_map, stable_objects_map)
+        self._refresh_cell_type_grid(current_map)
         current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
@@ -669,6 +825,7 @@ class SpatialMemoryNavigationSystem:
         )
         self.update_static_objects(current_map, stable_objects_map)
         self.update_static_landmarks(current_map, stable_objects_map)
+        self._refresh_cell_type_grid(current_map)
         current_map["metadata"]["grid_counts"] = self._grid_counts(current_map["static_grid"])
         current_map["metadata"]["coverage_percent"] = self._grid_coverage(current_map["static_grid"])
         current_map["metadata"]["scan_quality"] = min(1.0, current_map["metadata"]["coverage_percent"] / 85.0)
@@ -693,6 +850,7 @@ class SpatialMemoryNavigationSystem:
             if old_map_id in self.map_graph and old_map_id != current_map["map_id"]:
                 self.map_graph[current_map["map_id"]] = self.map_graph.pop(old_map_id)
                 self.map_graph[current_map["map_id"]]["name"] = clean_map_name
+        self._refresh_cell_type_grid(current_map)
         path = self._map_path(current_map["map_id"])
         path.write_text(json.dumps(current_map, indent=2), encoding="utf-8")
         self.map_graph.setdefault(current_map["map_id"], {
@@ -747,6 +905,7 @@ class SpatialMemoryNavigationSystem:
             data["metadata"].setdefault("origin_pose_mm", {"x": 0.0, "z": 0.0, "yaw": 0.0})
             data["metadata"].setdefault("origin_grid", {"z": self.height // 2, "x": self.width // 2})
             data["metadata"]["static_object_count"] = len(data.get("static_objects", []))
+            self._refresh_cell_type_grid(data)
             if anchor_pose is not None:
                 raw_origin_z, raw_origin_x = self._raw_pose_to_grid(anchor_pose)
                 session_origin_grid = {"z": raw_origin_z, "x": raw_origin_x}
@@ -968,11 +1127,14 @@ class SpatialMemoryNavigationSystem:
                 user_pos[0] - int(active_goal[0]),
                 user_pos[1] - int(active_goal[1]),
             ),
+            "last_landmark_distance_cells": self._landmark_distance_cells(user_pos),
             "last_path_distance_cells": self.distance_to_path(user_pos, best["path"]),
             "last_closest_path_index": self.closest_path_index(user_pos, best["path"]),
             "last_reroute_reason": None,
             "exit_reached": False,
             "exit_approach_announced": False,
+            "exit_passed_announced": False,
+            "last_navigation_event": None,
             "last_instruction": "",
         })
         return best, None
@@ -1014,35 +1176,60 @@ class SpatialMemoryNavigationSystem:
         goal_distance = self._goal_distance_cells(user_pos)
         landmark_distance = self._landmark_distance_cells(user_pos)
         exit_distance = landmark_distance if landmark_distance is not None else goal_distance
+        previous_exit_distance = self.state.get("last_landmark_distance_cells")
         path_status = self.path_tracking_status(user_pos)
         front_path_open = self.front_path_is_open(zones)
+        target = self.state.get("navigation_target") or {}
+        target_type = _normalize_label(target.get("type"))
+        is_exit_target = target_type in EXIT_LANDMARK_TYPES
 
-        if exit_distance is not None and exit_distance <= EXIT_REACHED_RADIUS_CELLS:
-            target = self.state.get("navigation_target") or {}
-            target_type = _normalize_label(target.get("type"))
-            if target_type in EXIT_LANDMARK_TYPES:
-                instruction = "You have reached the exit doorway and exited the room."
+        if (
+            is_exit_target
+            and self.state.get("exit_reached")
+            and not self.state.get("exit_passed_announced")
+            and exit_distance is not None
+            and previous_exit_distance is not None
+            and previous_exit_distance <= EXIT_REACHED_RADIUS_CELLS
+            and exit_distance >= EXIT_PASSED_RADIUS_CELLS
+        ):
+            instruction = "You exited the room."
+            self.state["exit_passed_announced"] = True
+            self.state["last_goal_distance_cells"] = goal_distance if goal_distance is not None else exit_distance
+            self.state["last_landmark_distance_cells"] = exit_distance
+            self.state["previous_user_pos"] = user_pos
+            self._update_path_tracking_state(user_pos)
+            self.state["last_instruction"] = instruction
+            return self._guidance_response(instruction, arrived=True, event="exit_passed")
+
+        if is_exit_target and exit_distance is not None and exit_distance <= EXIT_REACHED_RADIUS_CELLS:
+            if not self.state.get("exit_reached"):
+                instruction = "You have reached the exit."
                 self.state["exit_reached"] = True
                 self.state["last_goal_distance_cells"] = goal_distance if goal_distance is not None else exit_distance
+                self.state["last_landmark_distance_cells"] = exit_distance
                 self.state["previous_user_pos"] = user_pos
                 self._update_path_tracking_state(user_pos)
                 self.state["last_instruction"] = instruction
-                return self._guidance_response(instruction, arrived=True)
+                return self._guidance_response(instruction, arrived=True, event="exit_reached")
 
-        if exit_distance is not None and exit_distance <= DOORWAY_APPROACH_RADIUS_CELLS:
-            target = self.state.get("navigation_target") or {}
-            target_type = _normalize_label(target.get("type"))
-            if target_type in EXIT_LANDMARK_TYPES:
-                if front_path_open or target.get("passable") is True:
-                    instruction = "You are almost out of the door. Move forward through the open doorway."
-                else:
-                    instruction = "You are at the exit doorway. Move forward carefully."
-                self.state["exit_approach_announced"] = True
-                self.state["previous_user_pos"] = user_pos
-                self.state["last_goal_distance_cells"] = goal_distance if goal_distance is not None else exit_distance
-                self._update_path_tracking_state(user_pos)
-                self.state["last_instruction"] = instruction
-                return self._guidance_response(instruction)
+        if (
+            is_exit_target
+            and exit_distance is not None
+            and exit_distance <= DOORWAY_APPROACH_RADIUS_CELLS
+            and not self.state.get("exit_approach_announced")
+            and not self.state.get("exit_reached")
+        ):
+            if front_path_open or target.get("passable") is True:
+                instruction = "You are almost out of the door. Move forward through the open doorway."
+            else:
+                instruction = "You are close to the exit. Continue carefully toward the saved doorway."
+            self.state["exit_approach_announced"] = True
+            self.state["previous_user_pos"] = user_pos
+            self.state["last_goal_distance_cells"] = goal_distance if goal_distance is not None else exit_distance
+            self.state["last_landmark_distance_cells"] = exit_distance
+            self._update_path_tracking_state(user_pos)
+            self.state["last_instruction"] = instruction
+            return self._guidance_response(instruction, event="exit_approach")
 
         path_warning = self.path_deviation_warning(path_status)
         if path_warning:
@@ -1091,11 +1278,14 @@ class SpatialMemoryNavigationSystem:
         self.state["previous_user_pos"] = user_pos
         if goal_distance is not None:
             self.state["last_goal_distance_cells"] = goal_distance
+        if exit_distance is not None:
+            self.state["last_landmark_distance_cells"] = exit_distance
         self._update_path_tracking_state(user_pos)
         self.state["last_instruction"] = instruction
         return self._guidance_response(instruction, rerouted=rerouted)
 
-    def _guidance_response(self, instruction, rerouted=False, arrived=False):
+    def _guidance_response(self, instruction, rerouted=False, arrived=False, event=None):
+        self.state["last_navigation_event"] = event
         path = self.state.get("active_path", [])
         idx = self.state.get("current_waypoint_index", 0)
         remaining_cells = max(0, len(path) - idx - 1)
@@ -1125,6 +1315,7 @@ class SpatialMemoryNavigationSystem:
             "rerouted": rerouted,
             "reroute_reason": self.state.get("last_reroute_reason") if rerouted else None,
             "arrived": arrived,
+            "event": event,
             "user_grid": {"z": user_cell[0], "x": user_cell[1]},
             "path": path,
             "goal": {"z": self.state["active_goal"][0], "x": self.state["active_goal"][1]},
@@ -1180,7 +1371,7 @@ class SpatialMemoryNavigationSystem:
 
         dz = goal[0] - user_pos[0]
         dx = goal[1] - user_pos[1]
-        target_angle = math.degrees(math.atan2(dx, dz))
+        target_angle = _bearing_to_grid_delta(dx, dz)
         delta = (target_angle - user_yaw + 540.0) % 360.0 - 180.0
 
         if abs(delta) <= 25:
@@ -1286,13 +1477,15 @@ class SpatialMemoryNavigationSystem:
     def wall_ahead_warning(self, user_pos, user_yaw):
         current_map = self.state.get("current_map") or {}
         static_grid = self._normalize_grid(current_map.get("static_grid"))
-        yaw_rad = math.radians(float(user_yaw))
-        sin_yaw = math.sin(yaw_rad)
-        cos_yaw = math.cos(yaw_rad)
-
         for step in range(3, max(3, WALL_AHEAD_WARNING_CELLS) + 1):
-            x = _clamp(int(round(user_pos[1] + sin_yaw * step)), 0, self.width - 1)
-            z = _clamp(int(round(user_pos[0] + cos_yaw * step)), 0, self.height - 1)
+            z, x = forward_grid_cell(
+                user_pos[0],
+                user_pos[1],
+                user_yaw,
+                step,
+                width=self.width,
+                height=self.height,
+            )
             if int(static_grid[z][x]) == 1:
                 distance_m = step * self.cell_size_m
                 return f"Wall ahead on the saved map in about {distance_m:.1f} meters. {self.route_turn_hint(user_pos, user_yaw)}"
@@ -1314,7 +1507,7 @@ class SpatialMemoryNavigationSystem:
 
         dz = next_point[0] - user_pos[0]
         dx = next_point[1] - user_pos[1]
-        target_angle = math.degrees(math.atan2(dx, dz))
+        target_angle = _bearing_to_grid_delta(dx, dz)
         delta = (target_angle - user_yaw + 540.0) % 360.0 - 180.0
         if abs(delta) <= 25:
             return "Slow down and prepare to follow the reroute."
@@ -1338,7 +1531,7 @@ class SpatialMemoryNavigationSystem:
         waypoint = path[idx]
         dz = waypoint[0] - user_pos[0]
         dx = waypoint[1] - user_pos[1]
-        target_angle = math.degrees(math.atan2(dx, dz))
+        target_angle = _bearing_to_grid_delta(dx, dz)
         delta = (target_angle - user_yaw + 540.0) % 360.0 - 180.0
         distance_m = math.hypot(dz, dx) * self.cell_size_m
 
@@ -1361,11 +1554,14 @@ class SpatialMemoryNavigationSystem:
             "last_instruction": "",
             "previous_user_pos": None,
             "last_goal_distance_cells": None,
+            "last_landmark_distance_cells": None,
             "last_path_distance_cells": None,
             "last_closest_path_index": None,
             "last_reroute_reason": None,
             "exit_reached": False,
             "exit_approach_announced": False,
+            "exit_passed_announced": False,
+            "last_navigation_event": None,
         })
         return self.state
 

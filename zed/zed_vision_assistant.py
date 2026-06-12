@@ -57,6 +57,14 @@ import edge_tts
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zed_depth_processor import ZedDepthProcessor, ZedDepthConfig
 from llm_reasoner import ask_llm
+from map_coordinates import (
+    base_yaw_to_display_yaw,
+    base_yaw_to_projection_yaw,
+    camera_point_to_grid,
+    image_x_to_camera_point,
+    normalize_degrees,
+    pose_mm_to_grid,
+)
 
 # ==========================================
 # CONSTANTS & CONFIGURATION
@@ -64,7 +72,6 @@ from llm_reasoner import ask_llm
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 COCO_MODEL_PATH = os.getenv("VICKY_COCO_MODEL", "yolov8m.pt")
 DEFAULT_LANDMARK_MODEL_PATHS = (
-    "runs/detect/exit_sign_only/weights/best.pt;"
     "runs/detect/exit_sign_only_v2/weights/best.pt;"
     "runs/detect/door_combined_v1/weights/best.pt"
 )
@@ -73,15 +80,15 @@ LANDMARK_MODEL_PATHS = [
     for path in os.getenv("VICKY_YOLO_MODEL", DEFAULT_LANDMARK_MODEL_PATHS).replace(",", ";").split(";")
     if path.strip()
 ]
-COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.35"))
+COCO_CONFIDENCE = float(os.getenv("VICKY_COCO_CONF", "0.30"))
 COCO_IMAGE_SIZE = int(os.getenv("VICKY_COCO_IMGSZ", "320"))
 LANDMARK_CONFIDENCE = float(os.getenv("VICKY_LANDMARK_CONF", "0.30"))
 LANDMARK_IMAGE_SIZE = int(os.getenv("VICKY_LANDMARK_IMGSZ", "640"))
 CUSTOM_SUPPRESS_IOU = float(os.getenv("VICKY_CUSTOM_SUPPRESS_IOU", "0.40"))
-PERSON_CONFIDENCE = float(os.getenv("VICKY_PERSON_CONF", "0.35"))
-STATIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_STATIC_OBJECT_CONF", "0.40"))
-DYNAMIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_DYNAMIC_OBJECT_CONF", "0.35"))
-SMALL_OBJECT_CONFIDENCE = float(os.getenv("VICKY_SMALL_OBJECT_CONF", "0.45"))
+PERSON_CONFIDENCE = float(os.getenv("VICKY_PERSON_CONF", "0.30"))
+STATIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_STATIC_OBJECT_CONF", "0.35"))
+DYNAMIC_OBJECT_CONFIDENCE = float(os.getenv("VICKY_DYNAMIC_OBJECT_CONF", "0.30"))
+SMALL_OBJECT_CONFIDENCE = float(os.getenv("VICKY_SMALL_OBJECT_CONF", "0.38"))
 DOOR_CONFIDENCE = float(os.getenv("VICKY_DOOR_CONF", "0.35"))
 DOOR_MIN_ASPECT_RATIO = float(os.getenv("VICKY_DOOR_MIN_ASPECT", "1.20"))
 DOOR_MIN_HEIGHT_RATIO = float(os.getenv("VICKY_DOOR_MIN_HEIGHT_RATIO", "0.18"))
@@ -89,12 +96,17 @@ DOOR_REQUIRE_PASSAGE_DEPTH = os.getenv("VICKY_DOOR_REQUIRE_PASSAGE_DEPTH", "1").
 DOOR_PASSAGE_MIN_DEPTH_M = float(os.getenv("VICKY_DOOR_PASSAGE_MIN_DEPTH_M", "1.20"))
 DOOR_PASSAGE_DEPTH_DELTA_M = float(os.getenv("VICKY_DOOR_PASSAGE_DEPTH_DELTA_M", "0.35"))
 DOOR_DEPTH_MIN_VALID_RATIO = float(os.getenv("VICKY_DOOR_DEPTH_MIN_VALID_RATIO", "0.15"))
-EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.55"))
+EXIT_SIGN_CONFIDENCE = float(os.getenv("VICKY_EXIT_SIGN_CONF", "0.50"))
 EXIT_SIGN_MAX_AREA_RATIO = float(os.getenv("VICKY_EXIT_SIGN_MAX_AREA", "0.12"))
-COCO_FRAME_STRIDE = max(1, int(os.getenv("VICKY_COCO_EVERY_N", "2")))
-LANDMARK_FRAME_STRIDE = max(1, int(os.getenv("VICKY_LANDMARK_EVERY_N", "3")))
-YOLO_MAX_DETECTIONS = max(1, int(os.getenv("VICKY_YOLO_MAX_DET", "8")))
+COCO_FRAME_STRIDE = max(1, int(os.getenv("VICKY_COCO_EVERY_N", "3")))
+LANDMARK_FRAME_STRIDE = max(1, int(os.getenv("VICKY_LANDMARK_EVERY_N", "5")))
+YOLO_MAX_DETECTIONS = max(1, int(os.getenv("VICKY_YOLO_MAX_DET", "10")))
 ENABLE_TELEMETRY_STREAM = os.getenv("VICKY_ENABLE_TELEMETRY", "0").strip().lower() in {"1", "true", "yes"}
+ENABLE_DISPLAY = os.getenv("VICKY_ENABLE_DISPLAY", "1").strip().lower() in {"1", "true", "yes"}
+ENABLE_OCR = os.getenv("VICKY_ENABLE_OCR", "0").strip().lower() in {"1", "true", "yes"}
+EXIT_SIGN_SCAN_INTERVAL_S = float(os.getenv("VICKY_EXIT_SIGN_SCAN_INTERVAL_S", "3.0"))
+STORE_LATEST_FRAME = os.getenv("VICKY_STORE_LATEST_FRAME", "0").strip().lower() in {"1", "true", "yes"}
+LATEST_FRAME_STRIDE = max(1, int(os.getenv("VICKY_LATEST_FRAME_EVERY_N", "5")))
 ZED_DEPTH_MODE = os.getenv("VICKY_ZED_DEPTH_MODE", "PERFORMANCE")
 ZED_MIN_DEPTH_MM = int(os.getenv("VICKY_ZED_MIN_DEPTH_MM", "400"))
 ZED_MAX_DEPTH_MM = int(os.getenv("VICKY_ZED_MAX_DEPTH_MM", "10000"))
@@ -105,6 +117,7 @@ LIVE_DETECTION_MIN_OBS_MS = int(os.getenv("VICKY_LIVE_DET_MIN_OBS_MS", "300"))
 LIVE_DETECTION_MAX_MISS_MS = int(os.getenv("VICKY_LIVE_DET_MAX_MISS_MS", "900"))
 DYNAMIC_DETECTION_MAX_MISS_MS = int(os.getenv("VICKY_DYNAMIC_DET_MAX_MISS_MS", "250"))
 LIVE_DETECTION_MATCH_IOU = float(os.getenv("VICKY_LIVE_DET_MATCH_IOU", "0.25"))
+FILTER_LIVE_DETECTIONS_BY_STABILITY = os.getenv("VICKY_FILTER_LIVE_DETECTIONS_BY_STABILITY", "0").strip().lower() in {"1", "true", "yes"}
 POSE_SMOOTHING_ALPHA = float(os.getenv("VICKY_POSE_SMOOTHING_ALPHA", "0.35"))
 POSE_YAW_SMOOTHING_ALPHA = float(os.getenv("VICKY_POSE_YAW_SMOOTHING_ALPHA", "0.85"))
 TRACKING_WARNING_INTERVAL_S = float(os.getenv("VICKY_TRACKING_WARNING_INTERVAL_S", "5.0"))
@@ -146,7 +159,8 @@ ALLOWED_CLASSES = {
     "person", "chair", "couch", "bench", "dining table",
     "bottle", "backpack", "potted plant", "cell phone", "cup",
     "laptop", "book", "handbag", "suitcase", "bed", "tv",
-    "keyboard", "mouse", "remote",
+    "keyboard", "mouse", "remote", "refrigerator", "microwave",
+    "oven", "sink", "toilet", "toaster", "vase", "clock",
     "door", "open door", "closed door", "doorway", "door local", "exit sign",
     "open_door", "closed_door", "door_local", "exit_sign"
 }
@@ -156,6 +170,8 @@ STATIC_OBJECT_CLASSES = {
     "bed", "tv", "potted plant", "door", "open door",
     "closed door", "doorway", "door local", "exit sign",
     "open_door", "closed_door", "door_local", "exit_sign",
+    "refrigerator", "microwave", "oven", "sink", "toilet",
+    "toaster", "vase", "clock",
 }
 
 DYNAMIC_OBJECT_CLASSES = {
@@ -1073,7 +1089,8 @@ def vision_loop():
         "[YOLO] Performance mode: "
         f"COCO every {COCO_FRAME_STRIDE} frame(s) @ {COCO_IMAGE_SIZE}px, "
         f"landmarks every {LANDMARK_FRAME_STRIDE} frame(s) @ {LANDMARK_IMAGE_SIZE}px, "
-        f"max_det={YOLO_MAX_DETECTIONS}, display={'on' if os.getenv('VICKY_ENABLE_DISPLAY', '1').strip().lower() in {'1', 'true', 'yes'} else 'off'}"
+        f"max_det={YOLO_MAX_DETECTIONS}, display={'on' if ENABLE_DISPLAY else 'off'}, "
+        f"ocr={'on' if ENABLE_OCR else 'off'}"
     )
 
     prev_time = time.time()
@@ -1088,14 +1105,17 @@ def vision_loop():
     dynamic_grid_clear_cells = {}
     smoothed_pose = None
     last_tracking_warning_time = time.time()
+    landmark_model_count = max(1, sum(1 for source, _ in detection_models if source.startswith("landmark")))
 
-    display_enabled = os.getenv("VICKY_ENABLE_DISPLAY", "1").strip().lower() in {"1", "true", "yes"}
+    display_enabled = ENABLE_DISPLAY
     if display_enabled:
         try:
             cv2.namedWindow("ZED Spatial Live Vision Assistant")
         except cv2.error as e:
             print(f"[VISION] OpenCV display unavailable; continuing headless: {e}")
             display_enabled = False
+    if not display_enabled:
+        print("[VISION] Camera pipeline running headless. Set VICKY_ENABLE_DISPLAY=1 to show the PC preview window.")
 
     while running:
         # Check if map reset is requested
@@ -1201,10 +1221,16 @@ def vision_loop():
         detections = []
         temp_semantic_objects = []
 
-        tx_m = float(pose_for_frame.get("x", 0.0)) / 1000.0
-        tz_m = float(pose_for_frame.get("z", 0.0)) / 1000.0
-        yaw_rad = np.radians(float(pose_for_frame.get("yaw", 0.0)))
+        base_yaw_deg = normalize_degrees(float(pose_for_frame.get("yaw", 0.0)))
+        map_yaw_deg = base_yaw_to_projection_yaw(base_yaw_deg)
+        user_grid_z, user_grid_x = pose_mm_to_grid(
+            pose_for_frame.get("x", 0.0),
+            pose_for_frame.get("z", 0.0),
+        )
         fov_rad = np.radians(90.0)
+
+        def project_camera_point_to_grid(x_c: float, z_c: float) -> tuple[int, int]:
+            return camera_point_to_grid(user_grid_x, user_grid_z, map_yaw_deg, x_c, z_c)
 
         yolo_start_time = time.time()
         for model_index, (model_source, model) in enumerate(detection_models):
@@ -1212,10 +1238,14 @@ def vision_loop():
             confidence = LANDMARK_CONFIDENCE if is_landmark_model else COCO_CONFIDENCE
             image_size = LANDMARK_IMAGE_SIZE if is_landmark_model else COCO_IMAGE_SIZE
             stride = LANDMARK_FRAME_STRIDE if is_landmark_model else COCO_FRAME_STRIDE
-            offset = model_index % stride
+            if is_landmark_model:
+                landmark_position = max(1, model_index)
+                offset = int(round(((2 * landmark_position - 1) * stride) / (2 * landmark_model_count))) % stride
+            else:
+                offset = 0
             should_run_model = (
                 model_source not in cached_model_detections
-                or ((frame_index + offset) % stride == 0)
+                or (frame_index % stride == offset)
             )
 
             if not should_run_model:
@@ -1258,10 +1288,15 @@ def vision_loop():
                     box_area = max(0, x2 - x1) * max(0, y2 - y1)
                     area_ratio = box_area / frame_area
 
-                    min_area_ratio = 0.01 if is_landmark_model else 0.03
+                    if is_landmark_model:
+                        min_area_ratio = 0.005
+                    elif class_name in SMALL_OBJECT_CLASSES:
+                        min_area_ratio = 0.005
+                    elif class_name == "person":
+                        min_area_ratio = 0.025
+                    else:
+                        min_area_ratio = 0.012
                     if area_ratio < min_area_ratio:
-                        continue
-                    if class_name == "person" and area_ratio < 0.10:
                         continue
                     door_passable = None
                     if is_landmark_model and is_door_landmark(class_name):
@@ -1291,14 +1326,8 @@ def vision_loop():
                         depth_distance = float(depth_val_mm) / 1000.0  # mm to meters
 
                     if depth_distance is not None:
-                        # Project object onto 2D grid coordinates (invert sign to fix mirroring)
-                        angle_rad = -fov_rad/2.0 + center_x * (fov_rad / w)
-                        x_c = -depth_distance * np.sin(angle_rad)
-                        z_c = depth_distance * np.cos(angle_rad)
-                        x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                        z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                        grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
-                        grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
+                        x_c, z_c = image_x_to_camera_point(depth_distance, center_x, w, fov_rad)
+                        grid_x, grid_z = project_camera_point_to_grid(x_c, z_c)
                         semantic_label = semantic_label_for_detection(class_name, door_passable)
                         mobility = classify_object_mobility(semantic_label)
                         object_color = object_color_for_label(semantic_label, mobility)
@@ -1395,8 +1424,50 @@ def vision_loop():
             ]
 
         detection_now = time.time()
-        detections = update_stable_detections(detections, detection_tracks, detection_now)
-        temp_semantic_objects = filter_semantic_objects_by_stable_detections(temp_semantic_objects, detections)
+        raw_detections = detections
+        stable_detections = update_stable_detections(raw_detections, detection_tracks, detection_now)
+
+        if FILTER_LIVE_DETECTIONS_BY_STABILITY:
+            detections = stable_detections
+            temp_semantic_objects = filter_semantic_objects_by_stable_detections(
+                temp_semantic_objects,
+                stable_detections,
+            )
+        else:
+            stable_refs = []
+            for stable in stable_detections:
+                if "box" not in stable:
+                    continue
+                stable_refs.append({
+                    "label": detection_track_label(stable),
+                    "source_model": stable.get("source_model"),
+                    "box": tuple(stable["box"]),
+                    "observed_ms": stable.get("observed_ms", 0.0),
+                    "stable_seen_count": stable.get("stable_seen_count", 0),
+                })
+
+            annotated_detections = []
+            for detection in raw_detections:
+                detection_copy = detection.copy()
+                detection_copy.setdefault("observed_ms", 0.0)
+                detection_copy.setdefault("stable_seen_count", 1 if detection_copy.get("fresh", True) else 0)
+                detection_label = detection_track_label(detection_copy)
+                detection_source = detection_copy.get("source_model")
+                detection_box = tuple(detection_copy.get("box", (0, 0, 0, 0)))
+
+                for stable in stable_refs:
+                    if stable["label"] != detection_label:
+                        continue
+                    if stable["source_model"] != detection_source:
+                        continue
+                    if box_iou(detection_box, stable["box"]) >= LIVE_DETECTION_MATCH_IOU:
+                        detection_copy["observed_ms"] = stable["observed_ms"]
+                        detection_copy["stable_seen_count"] = stable["stable_seen_count"]
+                        break
+
+                annotated_detections.append(detection_copy)
+
+            detections = annotated_detections
         detections.sort(key=lambda d: d["area_ratio"], reverse=True)
 
         if render_detections:
@@ -1431,7 +1502,7 @@ def vision_loop():
             segment_x1 = max(0, peak_col - 120)
             segment_x2 = min(w, peak_col + 120)
             
-        if now - last_exit_check_time >= 1.5:
+        if now - last_exit_check_time >= EXIT_SIGN_SCAN_INTERVAL_S:
             last_exit_check_time = now
             
             # Pass the corresponding RGB frame segment bounding coordinates to OCR or color segmentation
@@ -1443,7 +1514,7 @@ def vision_loop():
                 roi_offset_x = 0
             
             # A. EasyOCR text check
-            if ocr_reader is not None:
+            if ENABLE_OCR and ocr_reader is not None:
                 try:
                     ocr_results = ocr_reader.readtext(upper_roi)
                     for bbox, text, conf in ocr_results:
@@ -1456,15 +1527,8 @@ def vision_loop():
                             if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
                                 depth_m = float(depth_val_mm) / 1000.0
                                 
-                                # Invert sign to fix mirroring
-                                angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
-                                x_c = -depth_m * np.sin(angle_rad)
-                                z_c = depth_m * np.cos(angle_rad)
-                                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                                
-                                grid_x_exit = max(0, min(int(x_w / 0.1) + 50, 99))
-                                grid_z_exit = max(0, min(int(z_w / 0.1) + 50, 99))
+                                x_c, z_c = image_x_to_camera_point(depth_m, cx, w, fov_rad)
+                                grid_x_exit, grid_z_exit = project_camera_point_to_grid(x_c, z_c)
                                 
                                 persistent_exit_signs[(grid_x_exit, grid_z_exit)] = (now, depth_m)
                                 
@@ -1503,15 +1567,8 @@ def vision_loop():
                             if not (np.isnan(depth_val_mm) or np.isinf(depth_val_mm) or depth_val_mm <= 0):
                                 depth_m = float(depth_val_mm) / 1000.0
                                 
-                                # Invert sign to fix mirroring
-                                angle_rad = -fov_rad/2.0 + cx * (fov_rad / w)
-                                x_c = -depth_m * np.sin(angle_rad)
-                                z_c = depth_m * np.cos(angle_rad)
-                                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                                
-                                grid_x_exit = max(0, min(int(x_w / 0.1) + 50, 99))
-                                grid_z_exit = max(0, min(int(z_w / 0.1) + 50, 99))
+                                x_c, z_c = image_x_to_camera_point(depth_m, cx, w, fov_rad)
+                                grid_x_exit, grid_z_exit = project_camera_point_to_grid(x_c, z_c)
                                 
                                 persistent_exit_signs[(grid_x_exit, grid_z_exit)] = (now, depth_m)
                                 
@@ -1599,20 +1656,28 @@ def vision_loop():
                         live_grid[nz, nx] = marker
 
             latest_detections = detections
-            latest_frame = rgb_frame.copy()
-            latest_depth_map = depth_frame.copy()
+            if STORE_LATEST_FRAME and frame_index % LATEST_FRAME_STRIDE == 0:
+                latest_frame = rgb_frame.copy()
+                latest_depth_map = depth_frame.copy()
+            elif not STORE_LATEST_FRAME:
+                latest_frame = None
+                latest_depth_map = None
             if not telemetry_source_active:
+                projection_yaw = map_yaw_deg
+                display_yaw = base_yaw_to_display_yaw(base_yaw_deg)
                 pose_data = {
                     "x": float(pose_for_frame.get("x", 0.0)),
                     "y": float(pose_for_frame.get("y", 0.0)),
                     "z": float(pose_for_frame.get("z", 0.0)),
                     "roll": float(pose_for_frame.get("roll", 0.0)),
                     "pitch": float(pose_for_frame.get("pitch", 0.0)),
-                    "yaw": float(pose_for_frame.get("yaw", 0.0)),
+                    "yaw": projection_yaw,
+                    "display_yaw": display_yaw,
+                    "projection_yaw": projection_yaw,
                     "raw_x": float(processor.tx),
                     "raw_y": float(processor.ty),
                     "raw_z": float(processor.tz),
-                    "raw_yaw": float(processor.yaw),
+                    "raw_yaw": float(getattr(processor, "raw_yaw", processor.yaw)),
                     "tracking_ok": bool(processor.is_tracking_ok),
                     "tracking_state": processor.tracking_state,
                     "vslam_enabled": bool(processor.positional_tracking_enabled),
@@ -2043,13 +2108,17 @@ def main():
     pygame.mixer.init()
     pygame.mixer.music.set_volume(1.0)
 
-    # Load OCR Reader
-    try:
-        print("[OCR] Loading EasyOCR reader...")
-        ocr_reader = easyocr.Reader(["en"], gpu=torch.cuda.is_available())
-        print("[OCR] EasyOCR loaded successfully.")
-    except Exception as e:
-        print(f"[OCR WARNING] Failed to load EasyOCR: {e}. OCR features disabled.")
+    # OCR is optional because EasyOCR can steal GPU/CPU time from live navigation.
+    if ENABLE_OCR:
+        try:
+            print("[OCR] Loading EasyOCR reader...")
+            ocr_reader = easyocr.Reader(["en"], gpu=torch.cuda.is_available())
+            print("[OCR] EasyOCR loaded successfully.")
+        except Exception as e:
+            print(f"[OCR WARNING] Failed to load EasyOCR: {e}. OCR features disabled.")
+            ocr_reader = None
+    else:
+        print("[OCR] Disabled for real-time mode. Set VICKY_ENABLE_OCR=1 to enable it.")
         ocr_reader = None
 
     enqueue_speech(

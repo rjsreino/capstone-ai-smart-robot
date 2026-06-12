@@ -13,11 +13,13 @@ import {
   View,
   Platform,
   KeyboardAvoidingView,
+  NativeModules,
 } from "react-native";
 
 import * as Speech from "expo-speech";
 import { Audio } from "expo-av";
 import { DeviceMotion } from "expo-sensors";
+import * as Network from "expo-network";
 import { LinearGradient } from "expo-linear-gradient";
 import Svg, { Circle, Line, Polygon, Polyline, Rect } from "react-native-svg";
 import { WebView } from "react-native-webview";
@@ -49,12 +51,273 @@ const OBJECT_CLASSIFICATION_COLORS = {
   landmark: "#facc15",
   exit: "#22f59c",
 };
+const CELL_TYPE_COLORS = {
+  0: "#0f172a",
+  1: "#64748b",
+  2: "#111827",
+  3: "#06b6d4",
+  4: "#f97316",
+  5: "#22f59c",
+  6: "#a855f7",
+};
+const CELL_TYPE_PRIORITY = {
+  0: 0,
+  2: 1,
+  1: 2,
+  6: 3,
+  3: 4,
+  4: 5,
+  5: 6,
+};
+const MAP_LEGEND_ITEMS = [
+  { label: "User facing", description: "your live direction", color: "#38bdf8", shape: "triangle" },
+  { label: "Route path", description: "recommended path", color: "#22c55e", shape: "line" },
+  { label: "Wall", description: "room boundary", color: CELL_TYPE_COLORS[1] },
+  { label: "Unknown area", description: "not confirmed yet", color: CELL_TYPE_COLORS[2] },
+  { label: "Unknown obstacle", description: "blocked, unclear type", color: CELL_TYPE_COLORS[6] },
+  { label: "Doorway", description: "open exit area", color: CELL_TYPE_COLORS[5] },
+  { label: "Door / exit sign", description: "saved landmark", color: OBJECT_CLASSIFICATION_COLORS.landmark },
+  { label: "Static object", description: "saved obstacle", color: CELL_TYPE_COLORS[3] },
+  { label: "Dynamic object", description: "temporary obstacle", color: CELL_TYPE_COLORS[4] },
+];
 
 const PROMPT_RESPONSE_TIMEOUT_MS = 10000;
 const MAP_SAVE_STABLE_OBS_MS = 300;
-const POSE_POLL_INTERVAL_MS = 100;
+const STATUS_POLL_INTERVAL_MS = 1200;
+const POSE_POLL_INTERVAL_MS = 150;
+const SERVER_HTTP_PORT = 8000;
+const IMU_WS_PORT = 8005;
+const AUTO_SERVER_PROBE_TIMEOUT_MS = 900;
+const AUTO_SERVER_SUBNET_TIMEOUT_MS = 250;
+const AUTO_SERVER_SCAN_BATCH_SIZE = 8;
 
 const clampMapCoord = (value) => Math.max(0, Math.min(Number(value) || 0, 99));
+
+const getHostFromUrl = (value) => {
+  const text = String(value || "").trim();
+  const urlMatch = text.match(/^(?:https?|exp|ws):\/\/([^:/?#]+)/i);
+  if (urlMatch?.[1]) return urlMatch[1];
+  const hostMatch = text.match(/^([^:/?#]+)(?::\d+)?(?:[/?#].*)?$/);
+  return hostMatch?.[1] || "";
+};
+
+const isUsableLanHost = (host) => {
+  const normalized = String(host || "").trim().toLowerCase();
+  return Boolean(normalized)
+    && normalized !== "localhost"
+    && normalized !== "127.0.0.1"
+    && normalized !== "::1"
+    && !normalized.endsWith(".exp.direct");
+};
+
+const isPrivateIpv4Host = (host) => {
+  const parts = String(host || "").split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  const [a, b] = parts;
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+};
+
+const subnetBaseFromHost = (host) => {
+  if (!isPrivateIpv4Host(host)) return "";
+  return String(host).split(".").slice(0, 3).join(".");
+};
+
+const getDeviceIpHost = async () => {
+  try {
+    const ipAddress = await Network.getIpAddressAsync();
+    return isPrivateIpv4Host(ipAddress) ? ipAddress : "";
+  } catch (error) {
+    console.log("Network IP lookup failed:", error);
+    return "";
+  }
+};
+
+const normalizeServerUrl = (value) => {
+  const trimmed = String(value || "").trim().replace(/\/+$/, "");
+  if (!trimmed) return "";
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  return `http://${trimmed}`;
+};
+
+const resolveAutoServerUrl = () => {
+  const scriptUrl = NativeModules?.SourceCode?.scriptURL;
+  const browserHost = Platform.OS === "web" ? globalThis?.location?.hostname : "";
+  const detectedHost = getHostFromUrl(scriptUrl) || browserHost;
+
+  if (detectedHost && detectedHost !== "localhost") {
+    return `http://${detectedHost}:${SERVER_HTTP_PORT}`;
+  }
+  if (Platform.OS === "android") {
+    return `http://10.0.2.2:${SERVER_HTTP_PORT}`;
+  }
+  return `http://127.0.0.1:${SERVER_HTTP_PORT}`;
+};
+
+const collectExpoHostCandidates = () => {
+  const hosts = [];
+  const seen = new Set();
+  const addHost = (value) => {
+    const host = getHostFromUrl(value);
+    if (!host || seen.has(host)) return;
+    seen.add(host);
+    hosts.push(host);
+  };
+
+  addHost(NativeModules?.SourceCode?.scriptURL);
+
+  const expoConstants = NativeModules?.ExponentConstants
+    || NativeModules?.ExpoConstants
+    || NativeModules?.Constants;
+  const inspect = (value, depth = 0) => {
+    if (depth > 4 || value == null) return;
+    if (typeof value === "string") {
+      if (value.includes("://") || value.includes(":")) addHost(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => inspect(item, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      Object.entries(value).forEach(([key, item]) => {
+        const keyName = String(key).toLowerCase();
+        if (
+          keyName.includes("host")
+          || keyName.includes("uri")
+          || keyName.includes("url")
+          || keyName.includes("debugger")
+        ) {
+          inspect(item, depth + 1);
+        }
+      });
+    }
+  };
+  inspect(expoConstants);
+
+  if (Platform.OS === "web" && globalThis?.location?.hostname) {
+    addHost(globalThis.location.hostname);
+  }
+
+  return hosts.filter(isUsableLanHost);
+};
+
+const getAutoServerCandidates = (preferredUrl = "") => {
+  const candidates = [];
+  const seen = new Set();
+  const addUrl = (value) => {
+    const normalized = normalizeServerUrl(value);
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  addUrl(preferredUrl);
+  collectExpoHostCandidates().forEach((host) => addUrl(`http://${host}:${SERVER_HTTP_PORT}`));
+  if (Platform.OS === "android") addUrl(`http://10.0.2.2:${SERVER_HTTP_PORT}`);
+  addUrl(`http://127.0.0.1:${SERVER_HTTP_PORT}`);
+
+  return candidates;
+};
+
+const getSubnetScanBases = async (preferredUrl = "", includeFallbackBases = false) => {
+  const bases = [];
+  const seen = new Set();
+  const addBase = (host) => {
+    const base = subnetBaseFromHost(host);
+    if (!base || seen.has(base)) return;
+    seen.add(base);
+    bases.push(base);
+  };
+
+  addBase(await getDeviceIpHost());
+  addBase(getHostFromUrl(preferredUrl));
+  collectExpoHostCandidates().forEach(addBase);
+  if (includeFallbackBases) {
+    [
+      "192.168.0.1",
+      "192.168.1.1",
+      "192.168.18.1",
+      "192.168.31.1",
+      "192.168.43.1",
+      "192.168.45.1",
+      "192.168.50.1",
+      "192.168.68.1",
+      "192.168.88.1",
+      "192.168.100.1",
+      "192.168.137.1",
+      "10.0.0.1",
+      "10.0.1.1",
+    ].forEach(addBase);
+  }
+  return bases;
+};
+
+const probeServerUrl = async (url) => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTO_SERVER_PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${url}/`, { signal: controller.signal });
+    if (!response.ok) return false;
+    const json = await response.json();
+    return String(json?.status || "").toLowerCase().includes("server");
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+};
+
+const discoverReachableServerUrl = async (preferredUrl = "", options = {}) => {
+  const includeFallbackBases = Boolean(options.includeFallbackBases);
+  const candidates = getAutoServerCandidates(preferredUrl);
+  for (const candidate of candidates) {
+    if (await probeServerUrl(candidate)) {
+      return candidate;
+    }
+  }
+
+  const preferredHosts = candidates
+    .map(getHostFromUrl)
+    .filter(isPrivateIpv4Host);
+  const preferredLastOctets = preferredHosts
+    .map((host) => Number(String(host).split(".")[3]))
+    .filter((value) => Number.isInteger(value) && value >= 1 && value <= 254);
+
+  for (const base of await getSubnetScanBases(preferredUrl, includeFallbackBases)) {
+    const octets = [];
+    const seen = new Set();
+    [...preferredLastOctets, ...Array.from({ length: 254 }, (_, index) => index + 1)].forEach((octet) => {
+      if (seen.has(octet)) return;
+      seen.add(octet);
+      octets.push(octet);
+    });
+
+    for (let start = 0; start < octets.length; start += AUTO_SERVER_SCAN_BATCH_SIZE) {
+      const batch = octets.slice(start, start + AUTO_SERVER_SCAN_BATCH_SIZE);
+      const results = await Promise.all(batch.map(async (octet) => {
+        const url = `http://${base}.${octet}:${SERVER_HTTP_PORT}`;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), AUTO_SERVER_SUBNET_TIMEOUT_MS);
+        try {
+          const response = await fetch(`${url}/`, { signal: controller.signal });
+          if (!response.ok) return "";
+          const json = await response.json();
+          return String(json?.status || "").toLowerCase().includes("server") ? url : "";
+        } catch {
+          return "";
+        } finally {
+          clearTimeout(timeout);
+        }
+      }));
+      const found = results.find(Boolean);
+      if (found) return found;
+    }
+  }
+
+  return "";
+};
 
 const normalizeDegrees = (value) => ((Number(value) % 360) + 360) % 360;
 
@@ -65,9 +328,9 @@ const angleDelta = (fromDeg, toDeg) => (
 const getMapFacingLabel = (yaw) => {
   const normalized = normalizeDegrees(yaw);
   if (normalized >= 45 && normalized < 135) return "RIGHT";
-  if (normalized >= 135 && normalized < 225) return "UP";
+  if (normalized >= 135 && normalized < 225) return "DOWN";
   if (normalized >= 225 && normalized < 315) return "LEFT";
-  return "DOWN";
+  return "UP";
 };
 
 const getObjectMobility = (object) => {
@@ -83,7 +346,8 @@ const getObjectColor = (object) => {
 };
 
 export default function App() {
-  const [serverUrl, setServerUrl] = useState("http://192.168.45.85:8000");
+  const [autoServerUrl, setAutoServerUrl] = useState(() => resolveAutoServerUrl());
+  const [serverUrl, setServerUrl] = useState("");
   const [data, setData] = useState(null);
   const [livePoseData, setLivePoseData] = useState(null);
   const [command, setCommand] = useState("");
@@ -98,9 +362,11 @@ export default function App() {
   const [savedMaps, setSavedMaps] = useState([]);
   const [currentMap, setCurrentMap] = useState(null);
   const [mapActionStatus, setMapActionStatus] = useState("");
+  const [autoServerStatus, setAutoServerStatus] = useState("Auto server not checked yet.");
   const [pendingPrompt, setPendingPrompt] = useState(null);
   const [roomSavePromptVisible, setRoomSavePromptVisible] = useState(false);
   const [roomNameDraft, setRoomNameDraft] = useState("");
+  const activeServerUrl = normalizeServerUrl(serverUrl);
 
   const lastSpoken = useRef("");
   const lastSpeakTime = useRef(0);
@@ -108,6 +374,25 @@ export default function App() {
   const guidanceEnabledRef = useRef(true);
   const pendingPromptRef = useRef(null);
   const promptTimeoutRef = useRef(null);
+
+  const applyAutoDetectedServer = async () => {
+    setAutoServerStatus("Full LAN scan running...");
+    const guessedUrl = resolveAutoServerUrl();
+    setAutoServerUrl(guessedUrl);
+
+    const detectedUrl = await discoverReachableServerUrl(guessedUrl, { includeFallbackBases: true });
+    if (detectedUrl) {
+      setAutoServerUrl(detectedUrl);
+      setServerUrl(detectedUrl);
+      setAutoServerStatus(`Connected to ${detectedUrl}`);
+      setLastResponse(`Auto server set to ${detectedUrl}`);
+      return;
+    }
+
+    setServerUrl("");
+    setAutoServerStatus(`Auto scan failed. Last guess was ${guessedUrl}`);
+    setLastResponse("Auto server scan failed. Check WiFi, LAN mode, backend server, and firewall.");
+  };
 
   const speakText = async (text, options = {}) => {
     if (!text) return;
@@ -154,7 +439,7 @@ export default function App() {
     lastSpeakTime.current = 0;
 
     try {
-      await fetch(`${serverUrl}/answer-prompt`, {
+      await fetch(`${activeServerUrl}/answer-prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt_id: promptId, answer: "no" }),
@@ -196,14 +481,41 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const autoConnect = async () => {
+      const guessedUrl = resolveAutoServerUrl();
+      setAutoServerUrl(guessedUrl);
+      setAutoServerStatus("Quick local server scan...");
+
+      const detectedUrl = await discoverReachableServerUrl(guessedUrl, { includeFallbackBases: false });
+      if (cancelled) return;
+
+      if (detectedUrl) {
+        setAutoServerUrl(detectedUrl);
+        setServerUrl(detectedUrl);
+        setAutoServerStatus(`Connected to ${detectedUrl}`);
+      } else {
+        setServerUrl("");
+        setAutoServerStatus(`Auto scan failed. Last guess was ${guessedUrl}`);
+      }
+    };
+
+    autoConnect();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => () => clearPromptTimeout(), []);
 
   useEffect(() => {
-  if (!serverUrl) return;
+  if (!activeServerUrl) return;
 
   const fetchAutopilot = async () => {
     try {
-      const response = await fetch(`${serverUrl}/autopilot-guidance`);
+      const response = await fetch(`${activeServerUrl}/autopilot-guidance`);
       const json = await response.json();
       const isAnswerPrompt = json.requires_answer && json.answer_type === "yes_no";
 
@@ -224,7 +536,7 @@ export default function App() {
   const interval = setInterval(fetchAutopilot, 1200);
 
   return () => clearInterval(interval);
-}, [serverUrl]);
+}, [activeServerUrl]);
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const scanAnim = useRef(new Animated.Value(0)).current;
@@ -233,17 +545,10 @@ export default function App() {
   const wsRef = useRef(null);
 
   useEffect(() => {
-    let ip = "127.0.0.1";
-    try {
-      const match = serverUrl.match(/\/\/([^:]+)/);
-      if (match && match[1]) {
-        ip = match[1];
-      }
-    } catch (err) {
-      console.log("Failed to parse IP from serverUrl:", err);
-    }
+    const normalizedUrl = activeServerUrl || autoServerUrl;
+    const ip = getHostFromUrl(normalizedUrl) || getHostFromUrl(autoServerUrl) || "127.0.0.1";
 
-    const wsUrl = `ws://${ip}:8005`;
+    const wsUrl = `ws://${ip}:${IMU_WS_PORT}`;
     console.log("[IMU WS] Connecting to:", wsUrl);
 
     const ws = new WebSocket(wsUrl);
@@ -312,7 +617,7 @@ export default function App() {
         ws.close();
       }
     };
-  }, [serverUrl]);
+  }, [activeServerUrl, autoServerUrl]);
 
   useEffect(() => {
     guidanceEnabledRef.current = guidanceEnabled;
@@ -440,7 +745,7 @@ export default function App() {
         type: "audio/x-caf",
       });
 
-      const response = await fetch(`${serverUrl}/voice-command`, {
+      const response = await fetch(`${activeServerUrl}/voice-command`, {
         method: "POST",
         body: formData,
       });
@@ -469,28 +774,36 @@ export default function App() {
 
   const speakGuidance = (json) => {
     if (!guidanceEnabledRef.current || !json) return;
-    if (pendingPromptRef.current) return;
-    if (Date.now() - lastCommandTime.current < 5000) return;
+    const navigation = json.navigation || {};
+    const navigationEvent = navigation.event || json.spatial_memory?.last_navigation_event;
+    const priorityNavigationEvents = new Set(["exit_approach", "exit_reached", "exit_passed"]);
+    const isPriorityNavigationEvent = priorityNavigationEvents.has(navigationEvent);
+    if (pendingPromptRef.current && !isPriorityNavigationEvent) return;
+    if (!isPriorityNavigationEvent && Date.now() - lastCommandTime.current < 5000) return;
 
     let message = "";
+    if (isPriorityNavigationEvent && navigation.instruction) {
+      message = navigation.instruction;
+    }
 
-    if (json.guidance === "STOP! DANGER") message = "Stop. Danger ahead.";
-    else if (json.guidance === "TURN LEFT") message = "Turn left.";
-    else if (json.guidance === "TURN RIGHT") message = "Turn right.";
-    else if (json.guidance === "GO FORWARD") message = "Path clear. Go forward.";
+    if (!message && json.guidance === "STOP! DANGER") message = "Stop. Danger ahead.";
+    else if (!message && json.guidance === "TURN LEFT") message = "Turn left.";
+    else if (!message && json.guidance === "TURN RIGHT") message = "Turn right.";
+    else if (!message && json.guidance === "GO FORWARD") message = "Path clear. Go forward.";
 
     const firstObject = json.detections?.[0];
-    if (firstObject) {
+    if (!isPriorityNavigationEvent && firstObject) {
       message += ` ${firstObject.object} detected ${firstObject.distance} at ${firstObject.position}.`;
     }
 
     if (!message || message === lastSpoken.current) return;
-    if (Date.now() - lastSpeakTime.current < 4000) return;
+    const minSpeakGap = isPriorityNavigationEvent ? 1200 : 4000;
+    if (Date.now() - lastSpeakTime.current < minSpeakGap) return;
 
     lastSpoken.current = message;
     lastSpeakTime.current = Date.now();
 
-    speakText(message);
+    speakText(message, { interrupt: isPriorityNavigationEvent });
   }
 
   const sendCommand = async () => {
@@ -501,7 +814,7 @@ export default function App() {
     setCommand("");
 
     try {
-      const response = await fetch(`${serverUrl}/command`, {
+      const response = await fetch(`${activeServerUrl}/command`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: userCommand }),
@@ -545,7 +858,7 @@ export default function App() {
       setIsProcessing(true);
       setMapActionStatus(`${answerText.toUpperCase()} selected...`);
 
-      const response = await fetch(`${serverUrl}/answer-prompt`, {
+      const response = await fetch(`${activeServerUrl}/answer-prompt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -583,7 +896,10 @@ export default function App() {
   };
 
   const postJson = async (path, body = {}) => {
-    const response = await fetch(`${serverUrl}${path}`, {
+    if (!activeServerUrl) {
+      throw new Error("Server not connected. Tap SCAN AUTO IP first.");
+    }
+    const response = await fetch(`${activeServerUrl}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -596,11 +912,11 @@ export default function App() {
   };
 
   const refreshMapState = async () => {
-    if (!serverUrl) return;
+    if (!activeServerUrl) return;
     try {
       const [mapsResponse, currentResponse] = await Promise.all([
-        fetch(`${serverUrl}/maps`),
-        fetch(`${serverUrl}/current-map`),
+        fetch(`${activeServerUrl}/maps`),
+        fetch(`${activeServerUrl}/current-map`),
       ]);
       const mapsJson = await mapsResponse.json();
       const currentJson = await currentResponse.json();
@@ -665,7 +981,7 @@ export default function App() {
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const response = await fetch(`${serverUrl}/status`);
+        const response = await fetch(`${activeServerUrl}/status`);
         const json = await response.json();
 
         setData(json);
@@ -678,9 +994,9 @@ export default function App() {
     };
 
     fetchStatus();
-    const interval = setInterval(fetchStatus, 300);
+    const interval = setInterval(fetchStatus, STATUS_POLL_INTERVAL_MS);
     return () => clearInterval(interval);
-  }, [serverUrl]);
+  }, [activeServerUrl]);
 
   useEffect(() => {
     let isMounted = true;
@@ -690,7 +1006,7 @@ export default function App() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const response = await fetch(`${serverUrl}/pose`);
+        const response = await fetch(`${activeServerUrl}/pose`);
         const json = await response.json();
         if (isMounted) {
           setLivePoseData(json);
@@ -708,13 +1024,13 @@ export default function App() {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [serverUrl]);
+  }, [activeServerUrl]);
 
   useEffect(() => {
     refreshMapState();
     const interval = setInterval(refreshMapState, 5000);
     return () => clearInterval(interval);
-  }, [serverUrl]);
+  }, [activeServerUrl]);
 
   const left = data?.left_distance ?? 0;
   const center = data?.center_distance ?? 0;
@@ -727,6 +1043,10 @@ export default function App() {
   const mapGrid = spatialMemory.mode === "mapping"
     ? data?.map || currentMap?.static_grid || []
     : currentMap?.static_grid || data?.map || [];
+  const mapTypeGrid = spatialMemory.mode === "mapping"
+    ? data?.cell_type_map || currentMap?.cell_type_grid || []
+    : currentMap?.cell_type_grid || data?.cell_type_map || [];
+  const mapRenderGrid = Array.isArray(mapTypeGrid) && mapTypeGrid.length ? mapTypeGrid : mapGrid;
   const mapLandmarks = currentMap?.landmarks || [];
   const mapStaticObjects = currentMap?.static_objects || [];
   const userGrid = livePoseData?.user_grid || data?.user_grid || { x: 50, z: 50 };
@@ -734,7 +1054,7 @@ export default function App() {
   const pose = livePoseData?.pose || data?.pose || {};
   const userMapX = clampMapCoord(userGrid.x ?? 50);
   const userMapZ = clampMapCoord(userGrid.z ?? 50);
-  const userYaw = normalizeDegrees(pose.raw_yaw ?? pose.yaw ?? 0);
+  const userYaw = normalizeDegrees(pose.display_yaw ?? pose.yaw ?? pose.raw_yaw ?? 0);
   const userFacingLabel = getMapFacingLabel(userYaw);
   const poseX = ((Number(pose.x) || 0) / 1000).toFixed(2);
   const poseY = ((Number(pose.y) || 0) / 1000).toFixed(2);
@@ -750,11 +1070,11 @@ export default function App() {
   const perfYoloMs = (Number(performance.yolo_ms) || 0).toFixed(0);
   const userYawRad = (userYaw * Math.PI) / 180;
   const headingTipX = clampMapCoord(userMapX + 2.2 * Math.sin(userYawRad));
-  const headingTipZ = clampMapCoord(userMapZ + 2.2 * Math.cos(userYawRad));
+  const headingTipZ = clampMapCoord(userMapZ - 2.2 * Math.cos(userYawRad));
   const headingBackX = userMapX - 1.1 * Math.sin(userYawRad);
-  const headingBackZ = userMapZ - 1.1 * Math.cos(userYawRad);
+  const headingBackZ = userMapZ + 1.1 * Math.cos(userYawRad);
   const headingSideX = 1.05 * Math.cos(userYawRad);
-  const headingSideZ = -1.05 * Math.sin(userYawRad);
+  const headingSideZ = 1.05 * Math.sin(userYawRad);
   const headingMarkerPoints = [
     `${headingTipX},${headingTipZ}`,
     `${clampMapCoord(headingBackX + headingSideX)},${clampMapCoord(headingBackZ + headingSideZ)}`,
@@ -767,7 +1087,7 @@ export default function App() {
   const routeTargetZ = nextRoutePoint ? clampMapCoord(nextRoutePoint[0]) : null;
   const hasRouteTarget = routeTargetX !== null && routeTargetZ !== null;
   const routeBearing = hasRouteTarget
-    ? normalizeDegrees((Math.atan2(routeTargetX - userMapX, routeTargetZ - userMapZ) * 180) / Math.PI)
+    ? normalizeDegrees((Math.atan2(routeTargetX - userMapX, -(routeTargetZ - userMapZ)) * 180) / Math.PI)
     : null;
   const routeDelta = hasRouteTarget ? angleDelta(userYaw, routeBearing) : 0;
   const routeTurnLabel = !hasRouteTarget
@@ -781,30 +1101,29 @@ export default function App() {
   const mapCellSize = 100 / mapSampleSize;
   const mapCells = [];
 
-  if (Array.isArray(mapGrid) && mapGrid.length) {
-    const rowStep = Math.max(1, Math.floor(mapGrid.length / mapSampleSize));
-    const colStep = Math.max(1, Math.floor((mapGrid[0]?.length || 100) / mapSampleSize));
+  if (Array.isArray(mapRenderGrid) && mapRenderGrid.length) {
+    const rowStep = Math.max(1, Math.floor(mapRenderGrid.length / mapSampleSize));
+    const colStep = Math.max(1, Math.floor((mapRenderGrid[0]?.length || 100) / mapSampleSize));
     for (let row = 0; row < mapSampleSize; row += 1) {
       for (let col = 0; col < mapSampleSize; col += 1) {
         const rowStart = row * rowStep;
-        const rowEnd = Math.min(rowStart + rowStep, mapGrid.length);
-        let hasWall = false;
-        let hasUnknown = false;
-        let hasSpecial = false;
+        const rowEnd = Math.min(rowStart + rowStep, mapRenderGrid.length);
+        let value = 0;
+        let priority = 0;
 
         for (let sourceRow = rowStart; sourceRow < rowEnd; sourceRow += 1) {
-          const rowData = mapGrid[sourceRow] || [];
+          const rowData = mapRenderGrid[sourceRow] || [];
           const colStart = col * colStep;
           const colEnd = Math.min(colStart + colStep, rowData.length || 100);
           for (let sourceCol = colStart; sourceCol < colEnd; sourceCol += 1) {
             const cellValue = Number(rowData[sourceCol] || 0);
-            if (cellValue === 1) hasWall = true;
-            else if (cellValue === 2) hasUnknown = true;
-            else if (cellValue > 0) hasSpecial = true;
+            const cellPriority = CELL_TYPE_PRIORITY[cellValue] ?? 0;
+            if (cellPriority > priority) {
+              value = cellValue;
+              priority = cellPriority;
+            }
           }
         }
-
-        const value = hasWall ? 1 : hasSpecial ? 3 : hasUnknown ? 2 : 0;
         mapCells.push({ row, col, value });
       }
     }
@@ -854,15 +1173,21 @@ export default function App() {
 
         <View style={styles.settingsCard}>
           <Text style={styles.panelLabel}>AI SERVER SETTINGS</Text>
+          <Text style={styles.settingsHint}>Auto local server: {autoServerUrl}</Text>
+          <Text style={styles.settingsStatus}>{autoServerStatus}</Text>
           <TextInput
             style={styles.settingsInput}
             value={serverUrl}
             onChangeText={setServerUrl}
-            placeholder="http://192.168.56.1:8000"
+            onEndEditing={() => setServerUrl(normalizeServerUrl(serverUrl))}
+            placeholder={autoServerUrl || "http://<local-ip>:8000"}
             placeholderTextColor="#64748b"
             autoCapitalize="none"
             autoCorrect={false}
           />
+          <Pressable style={styles.autoServerButton} onPress={applyAutoDetectedServer}>
+            <Text style={styles.autoServerButtonText}>SCAN AUTO IP</Text>
+          </Pressable>
         </View>
 
         <LinearGradient
@@ -992,11 +1317,7 @@ export default function App() {
             <Svg width="100%" height="100%" viewBox="0 0 100 100">
               <Rect x="0" y="0" width="100" height="100" fill="#020617" />
               {mapCells.map((cell, index) => {
-                const fill =
-                  cell.value === 1 ? "#64748b" :
-                  cell.value === 2 ? "#111827" :
-                  cell.value > 0 ? "#facc15" :
-                  "#0f172a";
+                const fill = CELL_TYPE_COLORS[cell.value] || "#0f172a";
                 return (
                   <Rect
                     key={`cell-${index}`}
@@ -1095,13 +1416,25 @@ export default function App() {
             </Text>
           </View>
 
-          <View style={styles.legendRow}>
-            <Text style={styles.legendText}>Blue triangle: user facing</Text>
-            <Text style={styles.legendText}>Gray: wall/block</Text>
-            <Text style={styles.legendText}>Dark: unknown</Text>
-            <Text style={styles.legendText}>Green/yellow: exit or door</Text>
-            <Text style={styles.legendText}>Cyan: static object</Text>
-            <Text style={styles.legendText}>Orange: dynamic object</Text>
+          <View style={styles.mapLegendPanel}>
+            <Text style={styles.mapLegendTitle}>MAP COLOR LEGEND</Text>
+            <View style={styles.legendRow}>
+              {MAP_LEGEND_ITEMS.map((item) => (
+                <View key={item.label} style={styles.legendItem}>
+                  {item.shape === "triangle" ? (
+                    <View style={[styles.legendTriangle, { borderBottomColor: item.color }]} />
+                  ) : item.shape === "line" ? (
+                    <View style={[styles.legendLine, { backgroundColor: item.color }]} />
+                  ) : (
+                    <View style={[styles.legendSwatch, { backgroundColor: item.color }]} />
+                  )}
+                  <View style={styles.legendCopy}>
+                    <Text style={styles.legendLabel}>{item.label}</Text>
+                    <Text style={styles.legendDescription}>{item.description}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
           </View>
 
           <View style={styles.mapActions}>
@@ -1174,12 +1507,18 @@ export default function App() {
 
           <Text style={styles.panelLabel}>DEBUG WEB MAP</Text>
           <View style={styles.webViewContainer}>
-            <WebView
-              source={{ uri: `${serverUrl}/map?embed=true` }}
-              style={styles.webView}
-              javaScriptEnabled={true}
-              domStorageEnabled={true}
-            />
+            {activeServerUrl ? (
+              <WebView
+                source={{ uri: `${activeServerUrl}/map?embed=true` }}
+                style={styles.webView}
+                javaScriptEnabled={true}
+                domStorageEnabled={true}
+              />
+            ) : (
+              <View style={styles.webViewPlaceholder}>
+                <Text style={styles.webViewPlaceholderText}>Scan auto IP to load the web map.</Text>
+              </View>
+            )}
           </View>
         </View>
 
@@ -1790,6 +2129,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#334155",
   },
+  settingsHint: {
+    color: "#94a3b8",
+    fontSize: 11,
+    fontWeight: "700",
+    marginBottom: 8,
+  },
+  settingsStatus: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  autoServerButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "#0f172a",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#38bdf8",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: 10,
+  },
+  autoServerButtonText: {
+    color: "#7dd3fc",
+    fontSize: 11,
+    fontWeight: "900",
+    letterSpacing: 0.5,
+  },
   roomNameInput: {
     backgroundColor: "#1e293b",
     borderRadius: 12,
@@ -1915,16 +2282,67 @@ const styles = StyleSheet.create({
     backgroundColor: "#7c2d12",
     color: "#ffedd5",
   },
+  mapLegendPanel: {
+    backgroundColor: "#0f172a",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#1e293b",
+    padding: 10,
+    marginTop: 10,
+    marginBottom: 14,
+  },
+  mapLegendTitle: {
+    color: "#cbd5e1",
+    fontSize: 10,
+    fontWeight: "900",
+    letterSpacing: 0.8,
+    marginBottom: 8,
+  },
   legendRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
-    marginTop: 10,
-    marginBottom: 14,
   },
-  legendText: {
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    width: "48%",
+    minHeight: 30,
+  },
+  legendSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 3,
+    borderWidth: 1,
+    borderColor: "rgba(248,250,252,0.45)",
+  },
+  legendTriangle: {
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderBottomWidth: 12,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
+  },
+  legendLine: {
+    width: 16,
+    height: 4,
+    borderRadius: 2,
+  },
+  legendCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  legendLabel: {
+    color: "#e2e8f0",
+    fontSize: 10,
+    fontWeight: "900",
+  },
+  legendDescription: {
     color: "#94a3b8",
-    fontSize: 11,
+    fontSize: 9,
     fontWeight: "700",
   },
   mapActions: {
@@ -2000,6 +2418,19 @@ const styles = StyleSheet.create({
   },
   webView: {
     flex: 1,
+  },
+  webViewPlaceholder: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#020617",
+    padding: 16,
+  },
+  webViewPlaceholderText: {
+    color: "#94a3b8",
+    fontSize: 13,
+    fontWeight: "800",
+    textAlign: "center",
   },
   mapCard: {
     backgroundColor: "#070b1f",

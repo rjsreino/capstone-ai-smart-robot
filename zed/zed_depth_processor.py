@@ -12,6 +12,17 @@ import os
 from typing import Tuple, Optional, Dict
 import time
 from dataclasses import dataclass
+from map_coordinates import (
+    CAMERA_X_SIGN,
+    MAP_CELL_SIZE_M,
+    POSE_X_SIGN,
+    POSE_YAW_OFFSET_DEG,
+    POSE_YAW_SIGN,
+    POSE_Z_SIGN,
+    base_yaw_to_projection_yaw,
+    camera_point_to_grid,
+    pose_mm_to_grid,
+)
 
 
 @dataclass
@@ -35,6 +46,14 @@ class ZedDepthConfig:
     wall_confidence_threshold: float = float(os.getenv("VICKY_WALL_CONFIDENCE_THRESHOLD", "0.58"))
     wall_inflation_cells: int = int(os.getenv("VICKY_WALL_INFLATION_CELLS", "1"))
     ray_clear_limit_m: float = float(os.getenv("VICKY_RAY_CLEAR_LIMIT_M", "4.5"))
+    map_update_stride: int = int(os.getenv("VICKY_MAP_UPDATE_EVERY_N", "3"))
+    enable_obstacle_map: bool = os.getenv("VICKY_ENABLE_OBSTACLE_MAP", "0").strip().lower() in {"1", "true", "yes"}
+    cell_size_m: float = MAP_CELL_SIZE_M
+    x_sign: float = POSE_X_SIGN
+    z_sign: float = POSE_Z_SIGN
+    yaw_sign: float = POSE_YAW_SIGN
+    heading_offset_deg: float = POSE_YAW_OFFSET_DEG
+    camera_x_sign: float = CAMERA_X_SIGN
 
 
 class ZedDepthProcessor:
@@ -68,6 +87,7 @@ class ZedDepthProcessor:
         self.tz = 0.0
         self.roll = 0.0
         self.pitch = 0.0
+        self.raw_yaw = 0.0
         self.yaw = 0.0
         self.positional_tracking_enabled = False
         self.is_tracking_ok = False
@@ -75,6 +95,7 @@ class ZedDepthProcessor:
         self.occupancy_grid = np.full((100, 100), 2, dtype=np.int8)
         self.wall_hit_grid = np.zeros((100, 100), dtype=np.float32)
         self.free_hit_grid = np.zeros((100, 100), dtype=np.float32)
+        self.nav_frame_count = 0
 
     def reset_occupancy_grid(self):
         """Reset mapping confidence while preserving the tri-state occupancy convention."""
@@ -277,10 +298,14 @@ class ZedDepthProcessor:
                         orientation = camera_pose.get_orientation().get()
                         qx, qy, qz, qw = orientation[0], orientation[1], orientation[2], orientation[3]
                         
-                        # yaw
                         siny_cosp = 2.0 * (qw * qy + qx * qz)
                         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-                        self.yaw = float(np.degrees(np.arctan2(siny_cosp, cosy_cosp)))
+                        self.raw_yaw = float(np.degrees(np.arctan2(siny_cosp, cosy_cosp)))
+                        self.yaw = float(
+                            (self.raw_yaw * self.config.yaw_sign + self.config.heading_offset_deg + 180.0)
+                            % 360.0
+                            - 180.0
+                        )
                         
                         # pitch
                         sinp = 2.0 * (qw * qx - qy * qz)
@@ -350,6 +375,7 @@ class ZedDepthProcessor:
         """
         if depth_frame is None:
             return None
+        self.nav_frame_count += 1
             
         # Prepare navigation depth without turning invalid zeros into near obstacles.
         depth_clipped = self.prepare_navigation_depth(depth_frame)
@@ -360,14 +386,17 @@ class ZedDepthProcessor:
         # Analyze depth zones
         zones = self.analyze_depth_zones(depth_clipped)
         
-        # Find obstacles
-        obstacles = self.detect_obstacles(depth_clipped)
+        # Full obstacle maps are optional because guidance already uses zones and grid depth.
+        obstacles = self.detect_obstacles(depth_clipped) if self.config.enable_obstacle_map else {}
         
         # Calculate safe directions
         safe_directions = self.calculate_safe_directions(grid_depth)
         
         # Accumulate 2D occupancy grid SLAM map
-        if self.positional_tracking_enabled:
+        if (
+            self.positional_tracking_enabled
+            and self.nav_frame_count % max(1, int(self.config.map_update_stride)) == 0
+        ):
             self._accumulate_grid(grid_depth)
         
         return {
@@ -406,14 +435,29 @@ class ZedDepthProcessor:
 
     def _accumulate_grid(self, grid_depth: np.ndarray) -> None:
         """Projects depth points to gravity-aligned World coordinates, filters out floor/ceiling, and runs ray-clearing."""
-        tx_m = self.tx / 1000.0
         ty_m = self.ty / 1000.0
-        tz_m = self.tz / 1000.0
-        yaw_rad = np.radians(self.yaw)
+        map_yaw_deg = base_yaw_to_projection_yaw(self.yaw)
         
         # Grid coordinates of the user (center is 50,50)
-        user_grid_x = max(0, min(int(tx_m / 0.1) + 50, 99))
-        user_grid_z = max(0, min(int(tz_m / 0.1) + 50, 99))
+        user_grid_z, user_grid_x = pose_mm_to_grid(
+            self.tx,
+            self.tz,
+            cell_size_m=self.config.cell_size_m,
+            width=100,
+            height=100,
+        )
+
+        def project_camera_point_to_grid(x_c: float, z_c: float) -> tuple[int, int]:
+            return camera_point_to_grid(
+                user_grid_x,
+                user_grid_z,
+                map_yaw_deg,
+                x_c,
+                z_c,
+                cell_size_m=self.config.cell_size_m,
+                width=100,
+                height=100,
+            )
         
         # ZED 1 FOV parameters
         hfov = np.radians(90.0)
@@ -439,15 +483,11 @@ class ZedDepthProcessor:
                     
                 d_m = d_mm / 1000.0
                 
-                # Point in camera coordinates (invert sign to fix mirroring)
-                x_c = -d_m * np.sin(col_angle)
+                # Keep camera lateral mirroring separate from VSLAM movement/facing.
+                x_c = self.config.camera_x_sign * d_m * np.sin(col_angle)
                 y_c = d_m * np.sin(row_angle)
                 z_c = d_m * np.cos(col_angle) * np.cos(row_angle)
                 
-                # Rotate around Y-axis (yaw) to world frame coordinates
-                # Gravity-aligned: Y_world points up, X_world lateral, Z_world forward
-                x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
                 y_w = ty_m + y_c
                 
                 # Obstacle height filter: ignore points near floor (e.g. y_world < -0.8m)
@@ -455,13 +495,11 @@ class ZedDepthProcessor:
                 if -0.8 <= y_w <= 0.4:
                     if closest_obstacle_d is None or d_m < closest_obstacle_d:
                         closest_obstacle_d = d_m
-                        closest_obstacle_pt = (x_w, y_w, z_w)
+                        grid_x, grid_z = project_camera_point_to_grid(x_c, z_c)
+                        closest_obstacle_pt = (grid_x, y_w, grid_z)
             
             if closest_obstacle_pt is not None:
-                # Project obstacle to grid coordinates
-                obs_x, _, obs_z = closest_obstacle_pt
-                grid_x = max(0, min(int(obs_x / 0.1) + 50, 99))
-                grid_z = max(0, min(int(obs_z / 0.1) + 50, 99))
+                grid_x, _, grid_z = closest_obstacle_pt
                 
                 # Raycast: clear all cells between user and obstacle
                 steps = max(abs(grid_x - user_grid_x), abs(grid_z - user_grid_z))
@@ -474,14 +512,10 @@ class ZedDepthProcessor:
                 # Mark obstacle cell
                 self._mark_wall_cell(grid_z, grid_x)
             else:
-                # No obstacle in this direction: clear path up to clearing limit (invert sign to fix mirroring)
-                x_c = -d_clear_limit * np.sin(col_angle)
+                # No obstacle in this direction: clear path up to clearing limit.
+                x_c = self.config.camera_x_sign * d_clear_limit * np.sin(col_angle)
                 z_c = d_clear_limit * np.cos(col_angle)
-                clear_x = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                clear_z = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                
-                grid_x = max(0, min(int(clear_x / 0.1) + 50, 99))
-                grid_z = max(0, min(int(clear_z / 0.1) + 50, 99))
+                grid_x, grid_z = project_camera_point_to_grid(x_c, z_c)
                 
                 steps = max(abs(grid_x - user_grid_x), abs(grid_z - user_grid_z))
                 if steps > 0:
@@ -499,23 +533,21 @@ class ZedDepthProcessor:
         
         cell_h = h // grid_h
         cell_w = w // grid_w
-        
-        grid = np.zeros((grid_h, grid_w), dtype=np.float32)
-        
-        for i in range(grid_h):
-            for j in range(grid_w):
-                y1, y2 = i * cell_h, (i + 1) * cell_h
-                x1, x2 = j * cell_w, (j + 1) * cell_w
-                
-                cell = depth_frame[y1:y2, x1:x2]
-                # Use median for robustness against outliers (ignore 0 values which represent invalid measurements)
-                valid_depths = cell[cell > 0]
-                if len(valid_depths) > 0:
-                    grid[i, j] = np.median(valid_depths)
-                else:
-                    grid[i, j] = self.config.max_depth  # No data = far away
-                    
-        return grid
+        if cell_h <= 0 or cell_w <= 0:
+            return np.full((grid_h, grid_w), self.config.max_depth, dtype=np.float32)
+
+        usable_h = cell_h * grid_h
+        usable_w = cell_w * grid_w
+        cells = depth_frame[:usable_h, :usable_w].reshape(grid_h, cell_h, grid_w, cell_w)
+
+        if np.any(cells <= 0):
+            masked = np.where(cells > 0, cells, np.nan)
+            grid = np.nanmedian(masked, axis=(1, 3))
+            grid = np.where(np.isnan(grid), self.config.max_depth, grid)
+        else:
+            grid = np.median(cells, axis=(1, 3))
+
+        return grid.astype(np.float32, copy=False)
         
     def analyze_depth_zones(self, depth_frame: np.ndarray) -> Dict:
         """Analyze depth in different zones (left, center, right, near, far)"""
@@ -529,29 +561,24 @@ class ZedDepthProcessor:
         # Focus on lower half (ground level and knee height)
         lower_half_y = h // 2
         
-        # Calculate stable depth profile (medians) for each column in lower half
-        col_medians = []
-        for col_idx in range(w):
-            col_pixels = depth_frame[lower_half_y:, col_idx]
-            valid = col_pixels[col_pixels > 0]
-            if len(valid) > 0:
-                col_medians.append(float(np.median(valid)))
-            else:
-                col_medians.append(0.0)
-                
-        # Smooth the profile using a 15-pixel moving average window
-        col_medians = np.array(col_medians)
-        smoothed = np.zeros_like(col_medians)
+        # Calculate stable depth profile vectorized per column.
+        lower_depth = depth_frame[lower_half_y:, :]
+        column_values = np.where(lower_depth > 0, lower_depth, np.nan)
+        col_medians = np.nanmedian(column_values, axis=0)
+        col_medians = np.nan_to_num(col_medians, nan=0.0)
+
+        # Smooth the profile using a 15-pixel moving average window.
         window = 15
-        for i in range(w):
-            start_idx = max(0, i - window // 2)
-            end_idx = min(w, i + window // 2 + 1)
-            valid_vals = col_medians[start_idx:end_idx]
-            valid_vals = valid_vals[valid_vals > 0]
-            if len(valid_vals) > 0:
-                smoothed[i] = np.mean(valid_vals)
-            else:
-                smoothed[i] = 0.0
+        valid_cols = col_medians > 0
+        kernel = np.ones(window, dtype=np.float32)
+        smoothed_sum = np.convolve(np.where(valid_cols, col_medians, 0.0), kernel, mode="same")
+        smoothed_count = np.convolve(valid_cols.astype(np.float32), kernel, mode="same")
+        smoothed = np.divide(
+            smoothed_sum,
+            smoothed_count,
+            out=np.zeros_like(smoothed_sum, dtype=np.float32),
+            where=smoothed_count > 0,
+        )
                 
         if len(smoothed) > 0 and np.max(smoothed) > 0:
             global_max_val = float(np.max(smoothed))

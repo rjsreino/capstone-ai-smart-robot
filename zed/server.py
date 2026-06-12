@@ -7,6 +7,7 @@ import tempfile
 import whisper
 import time
 import os
+import socket
 from llm_reasoner import ask_llm
 from vicky_db import db_logger, AsyncSessionLocal, OccupancyMap
 from sqlalchemy import select
@@ -14,6 +15,13 @@ import heapq
 import numpy as np
 from semantic_navigation import SemanticNavigator
 from spatial_memory import SpatialMemoryNavigationSystem, classify_object_mobility, object_color_for_label
+from map_coordinates import (
+    base_yaw_to_display_yaw,
+    base_yaw_to_projection_yaw,
+    camera_point_to_grid,
+    normalize_degrees,
+    pose_mm_to_grid,
+)
 
 # Global Navigation Goal: grid row Z, grid col X (default 3m forward)
 current_goal = (80, 50)
@@ -87,7 +95,7 @@ AUTO_MAPPING_REFRESH_INTERVAL = float(os.getenv("VICKY_AUTO_MAP_REFRESH_INTERVAL
 AUTO_MAPPING_MIN_LANDMARKS = int(os.getenv("VICKY_AUTO_MAP_MIN_LANDMARKS", "1"))
 MAPPING_PROMPT_ENABLED = os.getenv("VICKY_MAPPING_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
 DOORWAY_TRANSITION_PROMPT_ENABLED = os.getenv("VICKY_DOORWAY_TRANSITION_PROMPT", "1").strip().lower() not in {"0", "false", "no"}
-STATUS_CACHE_TTL = float(os.getenv("VICKY_STATUS_CACHE_TTL", "0.25"))
+STATUS_CACHE_TTL = float(os.getenv("VICKY_STATUS_CACHE_TTL", "1.00"))
 
 auto_mapping_thread = None
 auto_mapping_running = False
@@ -97,6 +105,34 @@ doorway_transition_awaiting_answer = False
 doorway_transition_context = None
 status_cache_time = 0.0
 status_cache_data = None
+
+
+def get_local_ipv4_addresses():
+    addresses = []
+    seen = set()
+
+    def add_address(address):
+        if not address or address.startswith("127.") or address in seen:
+            return
+        seen.add(address)
+        addresses.append(address)
+
+    try:
+        hostname = socket.gethostname()
+        for address_info in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            add_address(address_info[4][0])
+    except Exception:
+        pass
+
+    try:
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.connect(("8.8.8.8", 80))
+        add_address(udp_socket.getsockname()[0])
+        udp_socket.close()
+    except Exception:
+        pass
+
+    return addresses
 
 
 def _object_mobility(label, fallback=None):
@@ -577,7 +613,11 @@ async def telemetry_stream(websocket: WebSocket):
                     zva.pose_data["z"] = pos.get("z", 0.0) * 1000.0
                     zva.pose_data["roll"] = rot.get("roll", 0.0)
                     zva.pose_data["pitch"] = rot.get("pitch", 0.0)
-                    zva.pose_data["yaw"] = rot.get("yaw", 0.0)
+                    base_yaw = normalize_degrees(rot.get("yaw", 0.0))
+                    projection_yaw = base_yaw_to_projection_yaw(base_yaw)
+                    zva.pose_data["yaw"] = projection_yaw
+                    zva.pose_data["display_yaw"] = base_yaw_to_display_yaw(base_yaw)
+                    zva.pose_data["projection_yaw"] = projection_yaw
             
             zones = data.get("spatial_depth_zones")
             if zones:
@@ -596,9 +636,11 @@ async def telemetry_stream(websocket: WebSocket):
                         for c in range(100):
                             zva.occupancy_grid[r][c] = 0
                             
-                    tx_m = zva.pose_data.get("x", 0.0) / 1000.0
-                    tz_m = zva.pose_data.get("z", 0.0) / 1000.0
-                    yaw_rad = np.radians(zva.pose_data.get("yaw", 0.0))
+                    map_yaw = normalize_degrees(zva.pose_data.get("projection_yaw", zva.pose_data.get("yaw", 0.0)))
+                    user_grid_z, user_grid_x = pose_mm_to_grid(
+                        zva.pose_data.get("x", 0.0),
+                        zva.pose_data.get("z", 0.0),
+                    )
                     
                     zva.semantic_objects = []
                     zva.latest_detections = []
@@ -614,13 +656,7 @@ async def telemetry_stream(websocket: WebSocket):
                         )
                         object_color = obj.get("color") or _object_color(class_name, mobility)
                         
-                        # Project local camera coords to world coordinates
-                        x_w = tx_m + x_c * np.cos(yaw_rad) + z_c * np.sin(yaw_rad)
-                        z_w = tz_m - x_c * np.sin(yaw_rad) + z_c * np.cos(yaw_rad)
-                        
-                        # Convert to grid indices (0-99)
-                        grid_x = max(0, min(int(x_w / 0.1) + 50, 99))
-                        grid_z = max(0, min(int(z_w / 0.1) + 50, 99))
+                        grid_x, grid_z = camera_point_to_grid(user_grid_x, user_grid_z, map_yaw, x_c, z_c)
                         
                         # Persist only static objects into the room occupancy layer.
                         if mobility == "static":
@@ -683,7 +719,12 @@ async def video_stream(websocket: WebSocket):
 
 @app.get("/")
 def root():
-    return {"status": "AI server running"}
+    return {
+        "status": "AI server running",
+        "host": "0.0.0.0",
+        "port": 8000,
+        "local_urls": [f"http://{address}:8000" for address in get_local_ipv4_addresses()],
+    }
 
 @app.get("/status")
 def status():
@@ -700,6 +741,14 @@ def status():
         semantic_snapshot = [obj.copy() for obj in getattr(zva, "semantic_objects", [])]
         performance_snapshot = dict(getattr(zva, "performance_data", {}))
         guidance_snapshot = zva.guidance_cmd
+
+    navigation_snapshot = None
+    if spatial_memory.state.get("mode") == "navigating":
+        navigation_snapshot = spatial_memory.navigation_guidance(
+            pose=pose_snapshot,
+            semantic_objects=semantic_snapshot,
+            zones=zones_snapshot,
+        )
 
     detections = []
     for d in raw_detections:
@@ -740,6 +789,17 @@ def status():
         obj.get("mobility") or obj.get("classification"),
     ) == "static")
     live_dynamic_count = max(0, len(live_objects) - live_static_count)
+    live_dynamic_obstacles = spatial_memory.get_live_dynamic_obstacles(live_objects)
+    if current_map:
+        base_cell_type_map = current_map.get("cell_type_grid")
+        if not base_cell_type_map:
+            base_cell_type_map = spatial_memory._refresh_cell_type_grid(current_map)
+        cell_type_map = spatial_memory.overlay_live_dynamic_cell_types(
+            base_cell_type_map,
+            live_dynamic_obstacles,
+        )
+    else:
+        cell_type_map = grid_snapshot
 
     response = {
         "guidance": guidance_snapshot,
@@ -752,7 +812,9 @@ def status():
         "detections": detections,
         "pose": pose_snapshot,
         "performance": performance_snapshot,
+        "navigation": navigation_snapshot,
         "map": status_grid,
+        "cell_type_map": cell_type_map,
         "path": path,
         "goal": goal_data,
         "user_grid": {"x": user_grid_x, "z": user_grid_z},
@@ -775,6 +837,8 @@ def status():
                 else "start_mapping" if mapping_prompt_awaiting_answer
                 else None
             ),
+            "last_instruction": spatial_memory.state.get("last_instruction"),
+            "last_navigation_event": spatial_memory.state.get("last_navigation_event"),
         },
     }
     status_cache_data = response
@@ -811,11 +875,14 @@ def autopilot_guidance():
         )
         instruction = guidance_payload.get("instruction")
         if guidance_payload.get("active") and instruction:
+            navigation_event = guidance_payload.get("event")
             if (
                 DOORWAY_TRANSITION_PROMPT_ENABLED
                 and not doorway_transition_awaiting_answer
-                and "reached" in instruction.lower()
-                and ("exit" in instruction.lower() or "door" in instruction.lower())
+                and (
+                    navigation_event == "exit_passed"
+                    or "exited the room" in instruction.lower()
+                )
             ):
                 current_map = spatial_memory.state.get("current_map") or {}
                 target = spatial_memory.state.get("navigation_target") or {}
@@ -1518,7 +1585,8 @@ def map_view():
                 document.getElementById('poseX').textContent = ((pose.x || 0)/1000).toFixed(2) + ' m';
                 document.getElementById('poseY').textContent = ((pose.y || 0)/1000).toFixed(2) + ' m';
                 document.getElementById('poseZ').textContent = ((pose.z || 0)/1000).toFixed(2) + ' m';
-                document.getElementById('poseYaw').textContent = (pose.yaw || 0).toFixed(1) + ' deg';
+                const displayYaw = pose.display_yaw ?? pose.yaw ?? 0;
+                document.getElementById('poseYaw').textContent = displayYaw.toFixed(1) + ' deg';
                 document.getElementById('posePitch').textContent = (pose.pitch || 0).toFixed(1) + ' deg';
                 document.getElementById('poseRoll').textContent = (pose.roll || 0).toFixed(1) + ' deg';
                 
@@ -1695,10 +1763,11 @@ def map_view():
                 const uX = gridX * cellW + cellW/2;
                 const uY = gridZ * cellH + cellH/2;
                 
-                if (data.pose.yaw !== undefined) {
-                    const yawRad = (data.pose.yaw) * Math.PI / 180;
+                const displayYaw = data.pose.display_yaw ?? data.pose.yaw;
+                if (displayYaw !== undefined) {
+                    const yawRad = displayYaw * Math.PI / 180;
                     const headingX = uX + 15 * Math.sin(yawRad);
-                    const headingY = uY + 15 * Math.cos(yawRad);
+                    const headingY = uY - 15 * Math.cos(yawRad);
                     
                     ctx.beginPath();
                     ctx.strokeStyle = "#3b82f6";
@@ -2257,9 +2326,15 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="VICKY FastAPI Server")
     parser.add_argument("--no-camera", action="store_true", help="Do not run local ZED camera vision loop (use edge client)")
+    parser.add_argument("--headless", action="store_true", help="Run local ZED camera without the OpenCV preview window")
     args = parser.parse_known_args()[0]
 
     if not args.no_camera:
+        zva.ENABLE_DISPLAY = not args.headless
+        if zva.ENABLE_DISPLAY:
+            print("[SERVER] Local ZED preview display forced ON. Use --headless to hide it.")
+        else:
+            print("[SERVER] Local ZED preview display disabled by --headless.")
         vision_thread = threading.Thread(
             target=zva.vision_loop,
             daemon=True
@@ -2268,5 +2343,11 @@ if __name__ == "__main__":
         print("[SERVER] Started local ZED vision thread.")
     else:
         print("[SERVER] Running in edge-telemetry mode. Local ZED camera thread disabled.")
+
+    local_urls = [f"http://{address}:8000" for address in get_local_ipv4_addresses()]
+    if local_urls:
+        print("[SERVER] Local network URLs:")
+        for url in local_urls:
+            print(f"  {url}")
 
     uvicorn.run(app, host="0.0.0.0", port=8000)
